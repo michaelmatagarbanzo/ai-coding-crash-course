@@ -6,7 +6,9 @@ const sessionStorage = createCookieSessionStorage({
     httpOnly: true,
     sameSite: "lax",
     path: "/",
-    secrets: ["cadence-dev-secret"],
+    // Set SESSION_SECRET in production; the fallback is for local development.
+    secrets: [process.env.SESSION_SECRET ?? "cadence-dev-secret"],
+    secure: process.env.NODE_ENV === "production",
   },
 });
 

@@ -8,9 +8,14 @@ import * as schema from "./schema";
 // dragging better-sqlite3 into the browser. Keep this file side-effect free.
 let connection: Database.Database | undefined;
 
+/** The SQLite file: DATABASE_PATH in production, ./data.db locally. */
+export function databasePath() {
+  return process.env.DATABASE_PATH ?? "data.db";
+}
+
 export function getSqlite() {
   if (!connection) {
-    connection = new Database("data.db");
+    connection = new Database(databasePath());
     connection.pragma("journal_mode = WAL");
     connection.pragma("foreign_keys = ON");
   }
