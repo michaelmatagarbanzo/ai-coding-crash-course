@@ -32,8 +32,13 @@ function daysAgo(n: number): string {
   return d.toISOString();
 }
 
+/** Drops accents so "Andrés" becomes "Andres". */
+function toAscii(text: string): string {
+  return text.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+}
+
 function slugify(title: string): string {
-  return title
+  return toAscii(title)
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/(^-|-$)/g, "");
@@ -79,10 +84,10 @@ async function seed() {
   const [admin] = db
     .insert(schema.users)
     .values({
-      name: "Alex Rivera",
-      email: "alex.rivera@ralph.dev",
+      name: "Michael M.",
+      email: "michael.m@ralph.dev",
       role: UserRole.Admin,
-      avatarUrl: "https://api.dicebear.com/9.x/avataaars/svg?seed=alex",
+      avatarUrl: "https://api.dicebear.com/9.x/avataaars/svg?seed=michael-m",
       createdAt: daysAgo(120),
     })
     .returning()
@@ -91,10 +96,10 @@ async function seed() {
   const [instructor1] = db
     .insert(schema.users)
     .values({
-      name: "Sarah Chen",
-      email: "sarah.chen@ralph.dev",
+      name: "Rebeca R.",
+      email: "rebeca.r@ralph.dev",
       role: UserRole.Instructor,
-      avatarUrl: "https://api.dicebear.com/9.x/avataaars/svg?seed=sarah",
+      avatarUrl: "https://api.dicebear.com/9.x/avataaars/svg?seed=rebeca-r",
       bio: "Senior TypeScript engineer with 10 years of experience building large-scale web applications. Previously at Stripe and Vercel. Passionate about type safety and developer tooling.",
       createdAt: daysAgo(100),
     })
@@ -104,10 +109,10 @@ async function seed() {
   const [instructor2] = db
     .insert(schema.users)
     .values({
-      name: "Marcus Johnson",
-      email: "marcus.johnson@ralph.dev",
+      name: "Johan A.",
+      email: "johan.a@ralph.dev",
       role: UserRole.Instructor,
-      avatarUrl: "https://api.dicebear.com/9.x/avataaars/svg?seed=marcus",
+      avatarUrl: "https://api.dicebear.com/9.x/avataaars/svg?seed=johan-a",
       bio: "Full-stack developer and API architect specializing in Node.js and cloud infrastructure. Has built and scaled APIs serving millions of requests daily. Conference speaker and open-source contributor.",
       createdAt: daysAgo(95),
     })
@@ -118,38 +123,38 @@ async function seed() {
     .insert(schema.users)
     .values([
       {
-        name: "Emma Wilson",
-        email: "emma.wilson@student.dev",
+        name: "Richard B.",
+        email: "richard.b@student.dev",
         role: UserRole.Student,
-        avatarUrl: "https://api.dicebear.com/9.x/avataaars/svg?seed=emma",
+        avatarUrl: "https://api.dicebear.com/9.x/avataaars/svg?seed=richard-b",
         createdAt: daysAgo(60),
       },
       {
-        name: "James Park",
-        email: "james.park@student.dev",
+        name: "Luis F.",
+        email: "luis.f@student.dev",
         role: UserRole.Student,
-        avatarUrl: "https://api.dicebear.com/9.x/avataaars/svg?seed=james",
+        avatarUrl: "https://api.dicebear.com/9.x/avataaars/svg?seed=luis-f",
         createdAt: daysAgo(55),
       },
       {
-        name: "Olivia Martinez",
-        email: "olivia.martinez@student.dev",
+        name: "Roger E.",
+        email: "roger.e@student.dev",
         role: UserRole.Student,
-        avatarUrl: "https://api.dicebear.com/9.x/avataaars/svg?seed=olivia",
+        avatarUrl: "https://api.dicebear.com/9.x/avataaars/svg?seed=roger-e",
         createdAt: daysAgo(45),
       },
       {
-        name: "Liam Thompson",
-        email: "liam.thompson@student.dev",
+        name: "Julian A.",
+        email: "julian.a@student.dev",
         role: UserRole.Student,
-        avatarUrl: "https://api.dicebear.com/9.x/avataaars/svg?seed=liam",
+        avatarUrl: "https://api.dicebear.com/9.x/avataaars/svg?seed=julian-a",
         createdAt: daysAgo(30),
       },
       {
-        name: "Sophia Davis",
-        email: "sophia.davis@student.dev",
+        name: "Allan E.",
+        email: "allan.e@student.dev",
         role: UserRole.Student,
-        avatarUrl: "https://api.dicebear.com/9.x/avataaars/svg?seed=sophia",
+        avatarUrl: "https://api.dicebear.com/9.x/avataaars/svg?seed=allan-e",
         createdAt: daysAgo(20),
       },
     ])
@@ -159,10 +164,10 @@ async function seed() {
   const [bossy] = db
     .insert(schema.users)
     .values({
-      name: "Bossy McBossface",
-      email: "bossy.mcbossface@student.dev",
+      name: "Yelko C.",
+      email: "yelko.c@student.dev",
       role: UserRole.Student,
-      avatarUrl: "https://api.dicebear.com/9.x/avataaars/svg?seed=bossy",
+      avatarUrl: "https://api.dicebear.com/9.x/avataaars/svg?seed=yelko-c",
       createdAt: daysAgo(40),
     })
     .returning()
@@ -190,7 +195,7 @@ async function seed() {
 
   console.log(`Created ${categoriesData.length} categories.`);
 
-  // ─── Course 1: Introduction to TypeScript (Sarah Chen) ───
+  // ─── Course 1: Introduction to TypeScript (Rebeca R.) ───
 
   const [course1] = db
     .insert(schema.courses)
@@ -646,7 +651,7 @@ Practice by converting an existing JavaScript project to TypeScript. Start with 
     `Created course "${course1.title}" with ${c1Modules.length} modules and ${course1LessonIds.length} lessons.`
   );
 
-  // ─── Course 2: Building REST APIs with Node.js (Marcus Johnson) ───
+  // ─── Course 2: Building REST APIs with Node.js (Johan A.) ───
 
   const [course2] = db
     .insert(schema.courses)
@@ -1381,11 +1386,11 @@ You've completed the Building REST APIs course. You now have the skills to build
 
   // ─── Enrollments ───
   // Varied enrollment patterns:
-  // - Emma: enrolled in both courses (nearly complete in course 1, mid-way in course 2)
-  // - James: enrolled in course 1 only (completed)
-  // - Olivia: enrolled in both courses (just started course 1, mid-way in course 2)
-  // - Liam: enrolled in course 2 only (just started, abandoned)
-  // - Sophia: enrolled in course 1 only (recently enrolled, barely started)
+  // - Richard: enrolled in both courses (nearly complete in course 1, mid-way in course 2)
+  // - Luis: enrolled in course 1 only (completed)
+  // - Roger: enrolled in both courses (just started course 1, mid-way in course 2)
+  // - Julian: enrolled in course 2 only (just started, abandoned)
+  // - Allan: enrolled in course 1 only (recently enrolled, barely started)
 
   db.insert(schema.enrollments)
     .values([
@@ -1472,7 +1477,7 @@ You've completed the Building REST APIs course. You now have the skills to build
     return row;
   }
 
-  // Answered: student asks, Sarah answers, student confirms.
+  // Answered: student asks, Rebeca answers, student confirms.
   const c1q1 = comment({
     lessonId: course1LessonIds[2],
     userId: students[0].id,
@@ -1618,40 +1623,40 @@ You've completed the Building REST APIs course. You now have the skills to build
       .run();
   }
 
-  // Emma (students[0]) — nearly complete in course 1 (17 of 19 lessons done)
+  // Richard (students[0]) — nearly complete in course 1 (17 of 19 lessons done)
   for (let i = 0; i < 17; i++) {
     markComplete(students[0].id, course1LessonIds[i], 50 - i);
   }
   markInProgress(students[0].id, course1LessonIds[17]);
 
-  // Emma — mid-way through course 2 (10 of 20 lessons done)
+  // Richard — mid-way through course 2 (10 of 20 lessons done)
   for (let i = 0; i < 10; i++) {
     markComplete(students[0].id, course2LessonIds[i], 40 - i);
   }
   markInProgress(students[0].id, course2LessonIds[10]);
 
-  // James (students[1]) — completed all of course 1
+  // Luis (students[1]) — completed all of course 1
   for (let i = 0; i < course1LessonIds.length; i++) {
     markComplete(students[1].id, course1LessonIds[i], 45 - i);
   }
 
-  // Olivia (students[2]) — just started course 1 (3 lessons done)
+  // Roger (students[2]) — just started course 1 (3 lessons done)
   for (let i = 0; i < 3; i++) {
     markComplete(students[2].id, course1LessonIds[i], 30 - i);
   }
   markInProgress(students[2].id, course1LessonIds[3]);
 
-  // Olivia — mid-way through course 2 (8 lessons done)
+  // Roger — mid-way through course 2 (8 lessons done)
   for (let i = 0; i < 8; i++) {
     markComplete(students[2].id, course2LessonIds[i], 28 - i);
   }
 
-  // Liam (students[3]) — just started course 2, abandoned (2 lessons done)
+  // Julian (students[3]) — just started course 2, abandoned (2 lessons done)
   for (let i = 0; i < 2; i++) {
     markComplete(students[3].id, course2LessonIds[i], 22 - i);
   }
 
-  // Sophia (students[4]) — barely started course 1 (1 lesson done)
+  // Allan (students[4]) — barely started course 1 (1 lesson done)
   markComplete(students[4].id, course1LessonIds[0], 12);
   markInProgress(students[4].id, course1LessonIds[1]);
 
@@ -1711,31 +1716,31 @@ You've completed the Building REST APIs course. You now have the skills to build
     }
   }
 
-  // Emma — passed quiz 1 (3/3 correct)
+  // Richard — passed quiz 1 (3/3 correct)
   recordQuizAttempt(students[0].id, quiz1.id, quiz1OptionIds, [0, 1, 2], 35);
 
-  // Emma — passed quiz 2 (2/2 correct)
+  // Richard — passed quiz 2 (2/2 correct)
   recordQuizAttempt(students[0].id, quiz2.id, quiz2OptionIds, [0, 1], 30);
 
-  // Emma — passed quiz 3 (2/3 correct, just barely at 67% with 70% passing = fail, then retake)
+  // Richard — passed quiz 3 (2/3 correct, just barely at 67% with 70% passing = fail, then retake)
   recordQuizAttempt(students[0].id, quiz3.id, quiz3OptionIds, [0, 2], 28);
   // Retake — all correct
   recordQuizAttempt(students[0].id, quiz3.id, quiz3OptionIds, [0, 1, 2], 27);
 
-  // James — passed quiz 1 (3/3 correct)
+  // Luis — passed quiz 1 (3/3 correct)
   recordQuizAttempt(students[1].id, quiz1.id, quiz1OptionIds, [0, 1, 2], 40);
 
-  // James — passed quiz 2 (2/2 correct)
+  // Luis — passed quiz 2 (2/2 correct)
   recordQuizAttempt(students[1].id, quiz2.id, quiz2OptionIds, [0, 1], 35);
 
-  // Olivia — failed quiz 1 first attempt (1/3 correct), then passed on retry (3/3)
+  // Roger — failed quiz 1 first attempt (1/3 correct), then passed on retry (3/3)
   recordQuizAttempt(students[2].id, quiz1.id, quiz1OptionIds, [0], 25);
   recordQuizAttempt(students[2].id, quiz1.id, quiz1OptionIds, [0, 1, 2], 24);
 
-  // Olivia — passed quiz 3 (3/3 correct)
+  // Roger — passed quiz 3 (3/3 correct)
   recordQuizAttempt(students[2].id, quiz3.id, quiz3OptionIds, [0, 1, 2], 20);
 
-  // Sophia — failed quiz 1 (1/3 correct, hasn't retaken yet)
+  // Allan — failed quiz 1 (1/3 correct, hasn't retaken yet)
   recordQuizAttempt(students[4].id, quiz1.id, quiz1OptionIds, [1], 10);
 
   console.log("Created quiz attempts and answers.");
@@ -1761,17 +1766,17 @@ You've completed the Building REST APIs course. You now have the skills to build
       .run();
   }
 
-  // Emma watching course 1 lesson 1 (8 min video)
+  // Richard watching course 1 lesson 1 (8 min video)
   addWatchEvent(students[0].id, course1LessonIds[0], "play", 0, 50);
   addWatchEvent(students[0].id, course1LessonIds[0], "pause", 180, 50);
   addWatchEvent(students[0].id, course1LessonIds[0], "play", 180, 49);
   addWatchEvent(students[0].id, course1LessonIds[0], "ended", 480, 49);
 
-  // James watching course 1 lesson 1
+  // Luis watching course 1 lesson 1
   addWatchEvent(students[1].id, course1LessonIds[0], "play", 0, 45);
   addWatchEvent(students[1].id, course1LessonIds[0], "ended", 480, 45);
 
-  // Liam started watching course 2 lesson 1 but stopped mid-way
+  // Julian started watching course 2 lesson 1 but stopped mid-way
   addWatchEvent(students[3].id, course2LessonIds[0], "play", 0, 22);
   addWatchEvent(students[3].id, course2LessonIds[0], "pause", 300, 22);
   addWatchEvent(students[3].id, course2LessonIds[0], "seek", 150, 21);
@@ -1786,7 +1791,7 @@ You've completed the Building REST APIs course. You now have the skills to build
   const [purchase1] = db
     .insert(schema.purchases)
     .values({
-      userId: students[0].id, // Emma — bought course 1 individually
+      userId: students[0].id, // Richard — bought course 1 individually
       courseId: course1.id,
       amountPaid: 4999,
       country: "US",
@@ -1797,7 +1802,7 @@ You've completed the Building REST APIs course. You now have the skills to build
 
   db.insert(schema.purchases)
     .values({
-      userId: students[0].id, // Emma — bought course 2 individually
+      userId: students[0].id, // Richard — bought course 2 individually
       courseId: course2.id,
       amountPaid: 5999,
       country: "US",
@@ -1807,7 +1812,7 @@ You've completed the Building REST APIs course. You now have the skills to build
 
   db.insert(schema.purchases)
     .values({
-      userId: students[1].id, // James — bought course 1 with PPP discount (India)
+      userId: students[1].id, // Luis — bought course 1 with PPP discount (India)
       courseId: course1.id,
       amountPaid: 2500,
       country: "IN",
@@ -1817,7 +1822,7 @@ You've completed the Building REST APIs course. You now have the skills to build
 
   db.insert(schema.purchases)
     .values({
-      userId: students[2].id, // Olivia — bought course 1 individually
+      userId: students[2].id, // Roger — bought course 1 individually
       courseId: course1.id,
       amountPaid: 4999,
       country: "US",
@@ -1827,7 +1832,7 @@ You've completed the Building REST APIs course. You now have the skills to build
 
   db.insert(schema.purchases)
     .values({
-      userId: students[4].id, // Sophia — bought course 1 individually
+      userId: students[4].id, // Allan — bought course 1 individually
       courseId: course1.id,
       amountPaid: 4999,
       country: "US",
@@ -1838,7 +1843,7 @@ You've completed the Building REST APIs course. You now have the skills to build
   console.log("Created 5 individual purchases.");
 
   // ─── Teams, Team Members, and Coupons ───
-  // Bossy McBossface bought 5 team seats for course 2; Olivia and Liam redeemed coupons
+  // Yelko C. bought 5 team seats for course 2; Roger and Julian redeemed coupons
 
   const [team1] = db
     .insert(schema.teams)
@@ -1855,7 +1860,7 @@ You've completed the Building REST APIs course. You now have the skills to build
     })
     .run();
 
-  // Team purchase by Bossy McBossface for course 2 (5 seats)
+  // Team purchase by Yelko C. for course 2 (5 seats)
   const [teamPurchase] = db
     .insert(schema.purchases)
     .values({
@@ -1891,8 +1896,8 @@ You've completed the Building REST APIs course. You now have the skills to build
     .returning()
     .all();
 
-  // Redeem 2 coupons: Olivia (students[2]) and Liam (students[3])
-  // Olivia already has an enrollment for course 2 from the enrollments section above
+  // Redeem 2 coupons: Roger (students[2]) and Julian (students[3])
+  // Roger already has an enrollment for course 2 from the enrollments section above
   db.update(schema.coupons)
     .set({
       redeemedByUserId: students[2].id,
@@ -1901,7 +1906,7 @@ You've completed the Building REST APIs course. You now have the skills to build
     .where(eq(schema.coupons.id, seededCoupons[0].id))
     .run();
 
-  // Liam already has an enrollment for course 2 from the enrollments section above
+  // Julian already has an enrollment for course 2 from the enrollments section above
   db.update(schema.coupons)
     .set({
       redeemedByUserId: students[3].id,
@@ -1911,7 +1916,7 @@ You've completed the Building REST APIs course. You now have the skills to build
     .run();
 
   console.log(
-    `Created 1 team with Bossy McBossface as admin, 1 team purchase, and ${seededCoupons.length} coupons (2 redeemed, 3 available).`
+    `Created 1 team with Yelko C. as admin, 1 team purchase, and ${seededCoupons.length} coupons (2 redeemed, 3 available).`
   );
 
   // ─── Analytics Cohort ───
@@ -1931,15 +1936,15 @@ You've completed the Building REST APIs course. You now have the skills to build
 
   const cohort: CohortMember[] = [
     // Course 1 — Introduction to TypeScript
-    { name: "Ava Chen", country: "SG", course: course1, lessonIds: course1LessonIds, enrolledDaysAgo: 85, lessonsCompleted: "all" },
-    { name: "Lucas Silva", country: "BR", course: course1, lessonIds: course1LessonIds, enrolledDaysAgo: 70, lessonsCompleted: 12 },
-    { name: "Mia Kowalski", country: "PL", course: course1, lessonIds: course1LessonIds, enrolledDaysAgo: 62, lessonsCompleted: 5 },
-    { name: "Ethan Okafor", country: "NG", course: course1, lessonIds: course1LessonIds, enrolledDaysAgo: 55, lessonsCompleted: 0 },
-    { name: "Isabella Rossi", country: "DE", course: course1, lessonIds: course1LessonIds, enrolledDaysAgo: 28, lessonsCompleted: "all" },
-    { name: "Mateo Garcia", country: "MX", course: course1, lessonIds: course1LessonIds, enrolledDaysAgo: 24, lessonsCompleted: 5 },
-    { name: "Chloe Dubois", country: "FR", course: course1, lessonIds: course1LessonIds, enrolledDaysAgo: 18, lessonsCompleted: 2 },
-    { name: "Arjun Mehta", country: "IN", course: course1, lessonIds: course1LessonIds, enrolledDaysAgo: 8, lessonsCompleted: 0 },
-    { name: "Zara Ahmed", country: "PK", course: course1, lessonIds: course1LessonIds, enrolledDaysAgo: 5, lessonsCompleted: 1 },
+    { name: "Andrés S.", country: "SG", course: course1, lessonIds: course1LessonIds, enrolledDaysAgo: 85, lessonsCompleted: "all" },
+    { name: "Waleska B.", country: "BR", course: course1, lessonIds: course1LessonIds, enrolledDaysAgo: 70, lessonsCompleted: 12 },
+    { name: "Guido D.", country: "PL", course: course1, lessonIds: course1LessonIds, enrolledDaysAgo: 62, lessonsCompleted: 5 },
+    { name: "Rebeca J.", country: "NG", course: course1, lessonIds: course1LessonIds, enrolledDaysAgo: 55, lessonsCompleted: 0 },
+    { name: "Steven V.", country: "DE", course: course1, lessonIds: course1LessonIds, enrolledDaysAgo: 28, lessonsCompleted: "all" },
+    { name: "Edson P.", country: "MX", course: course1, lessonIds: course1LessonIds, enrolledDaysAgo: 24, lessonsCompleted: 5 },
+    { name: "Carlos A.", country: "FR", course: course1, lessonIds: course1LessonIds, enrolledDaysAgo: 18, lessonsCompleted: 2 },
+    { name: "Jordan H.", country: "IN", course: course1, lessonIds: course1LessonIds, enrolledDaysAgo: 8, lessonsCompleted: 0 },
+    { name: "Jorge G.", country: "PK", course: course1, lessonIds: course1LessonIds, enrolledDaysAgo: 5, lessonsCompleted: 1 },
     // Course 2 — Building REST APIs with Node.js
     { name: "Oliver Brown", country: "GB", course: course2, lessonIds: course2LessonIds, enrolledDaysAgo: 80, lessonsCompleted: "all" },
     { name: "Amara Nwosu", country: "KE", course: course2, lessonIds: course2LessonIds, enrolledDaysAgo: 66, lessonsCompleted: 6 },
@@ -1951,7 +1956,7 @@ You've completed the Building REST APIs course. You now have the skills to build
   ];
 
   function emailFor(name: string) {
-    return `${name.toLowerCase().replace(/\s+/g, ".")}@student.dev`;
+    return `${toAscii(name).toLowerCase().replace(/\./g, "").replace(/\s+/g, ".")}@student.dev`;
   }
 
   function createStudent(name: string, joinedDaysAgo: number) {
@@ -2021,8 +2026,8 @@ You've completed the Building REST APIs course. You now have the skills to build
       member.lessonsCompleted
     );
 
-    // Ava comes back for the second course — a repeat buyer for the leaderboard.
-    if (member.name === "Ava Chen") {
+    // Andrés comes back for the second course — a repeat buyer for the leaderboard.
+    if (member.name === "Andrés S.") {
       db.insert(schema.purchases)
         .values({
           userId: user.id,
@@ -2037,8 +2042,8 @@ You've completed the Building REST APIs course. You now have the skills to build
     }
   }
 
-  // A second team: Priya Shah buys 3 seats of course 1; two are redeemed.
-  const priya = createStudent("Priya Shah", 80);
+  // A second team: Audrey A. buys 3 seats of course 1; two are redeemed.
+  const priya = createStudent("Audrey A.", 80);
   const [team2] = db
     .insert(schema.teams)
     .values({ createdAt: daysAgo(75) })
