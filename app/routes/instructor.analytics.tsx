@@ -1,18 +1,33 @@
-import { Link, data, isRouteErrorResponse } from "react-router";
+import {
+  Link,
+  isRouteErrorResponse,
+  useNavigate,
+  useSearchParams,
+} from "react-router";
 import type { Route } from "./+types/instructor.analytics";
 import { requireInstructorOrAdmin } from "~/lib/access.server";
 import {
   ANALYTICS_RANGES,
   getInstructorAnalytics,
   type AnalyticsRange,
+  type AnalyticsScope,
 } from "~/services/analyticsService";
+import { getUsersByRole } from "~/services/userService";
+import { UserRole } from "~/db/schema";
 import { PLATFORM_FEE_RATE, type Earnings } from "~/lib/earnings";
 import { cn, formatMoney } from "~/lib/utils";
 import { Card, CardContent, CardHeader, CardTitle } from "~/components/ui/card";
 import { Button } from "~/components/ui/button";
 import { Skeleton } from "~/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "~/components/ui/tabs";
-import { AlertTriangle, BarChart3, Plus, Receipt } from "lucide-react";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "~/components/ui/select";
+import { AlertTriangle, BarChart3, Plus, Receipt, Users } from "lucide-react";
 
 export function meta() {
   return [
@@ -27,22 +42,34 @@ const RANGE_LABELS: Record<AnalyticsRange, string> = {
   all: "All time",
 };
 
+type InstructorOption = { id: number; name: string };
+type TopBuyer = ReturnType<typeof getInstructorAnalytics>["topBuyers"][number];
+
 function parseRange(value: string | null): AnalyticsRange {
   return ANALYTICS_RANGES.find((r) => r === value) ?? "30d";
 }
 
 export async function loader({ request, url }: Route.LoaderArgs) {
   const { userId, isAdmin } = await requireInstructorOrAdmin(request);
+  const range = parseRange(url.searchParams.get("range"));
 
-  // The admin view (instructor picker) arrives in a follow-up ticket.
+  // Instructors always see their own courses; `instructorId` is admin-only and
+  // ignored otherwise. Admins default to the platform-wide view.
+  let scope: AnalyticsScope = userId;
+  let instructors: InstructorOption[] | null = null;
+
   if (isAdmin) {
-    throw data("Only instructors can access this page.", { status: 403 });
+    instructors = getUsersByRole(UserRole.Instructor).map(({ id, name }) => ({
+      id,
+      name,
+    }));
+    const requested = url.searchParams.get("instructorId");
+    scope = instructors.find((i) => String(i.id) === requested)?.id ?? "all";
   }
 
-  const range = parseRange(url.searchParams.get("range"));
-  const analytics = getInstructorAnalytics(userId, range, new Date());
+  const analytics = getInstructorAnalytics(scope, range, new Date());
 
-  return { range, analytics };
+  return { range, scope, isAdmin, instructors, analytics };
 }
 
 export function HydrateFallback() {
@@ -61,7 +88,8 @@ export function HydrateFallback() {
 export default function InstructorAnalytics({
   loaderData,
 }: Route.ComponentProps) {
-  const { range, analytics } = loaderData;
+  const { range, scope, isAdmin, instructors, analytics } = loaderData;
+  const rangeLabel = RANGE_LABELS[range];
 
   return (
     <div className="mx-auto max-w-7xl p-6 lg:p-8">
@@ -77,29 +105,49 @@ export default function InstructorAnalytics({
         <div>
           <h1 className="text-3xl font-bold">Analytics</h1>
           <p className="mt-1 text-muted-foreground">
-            How your courses are performing
+            {isAdmin
+              ? scope === "all"
+                ? "How courses across the platform are performing"
+                : `How ${instructors?.find((i) => i.id === scope)?.name}'s courses are performing`
+              : "How your courses are performing"}
           </p>
         </div>
-        {analytics.courseCount > 0 && <RangePicker current={range} />}
+        <div className="flex flex-wrap items-center gap-3">
+          {instructors && (
+            <InstructorPicker instructors={instructors} scope={scope} />
+          )}
+          {analytics.courseCount > 0 && <RangePicker current={range} />}
+        </div>
       </div>
 
       {analytics.courseCount === 0 ? (
-        <NoCoursesState />
+        <NoCoursesState isAdmin={isAdmin} />
       ) : (
         <Tabs defaultValue="overview">
           <TabsList>
             <TabsTrigger value="overview">Overview</TabsTrigger>
+            <TabsTrigger value="top-buyers">Top buyers</TabsTrigger>
           </TabsList>
-          <TabsContent value="overview" className="mt-4">
+          <TabsContent value="overview" className="mt-4 space-y-6">
             {analytics.salesCount === 0 ? (
               <NoSalesState range={range} />
             ) : (
               <EarningsOverview
                 earnings={analytics.earnings}
                 salesCount={analytics.salesCount}
-                rangeLabel={RANGE_LABELS[range]}
+                rangeLabel={rangeLabel}
               />
             )}
+            <StudentsOverview
+              buyerCount={analytics.buyerCount}
+              studentCount={analytics.studentCount}
+              averageProgress={analytics.averageProgress}
+              completionRate={analytics.completionRate}
+              rangeLabel={rangeLabel}
+            />
+          </TabsContent>
+          <TabsContent value="top-buyers" className="mt-4">
+            <TopBuyers buyers={analytics.topBuyers} rangeLabel={rangeLabel} />
           </TabsContent>
         </Tabs>
       )}
@@ -107,7 +155,54 @@ export default function InstructorAnalytics({
   );
 }
 
+/** A `?query` for the current URL with some params replaced or removed. */
+function useHrefWith() {
+  const [searchParams] = useSearchParams();
+  return (updates: Record<string, string | null>) => {
+    const next = new URLSearchParams(searchParams);
+    for (const [key, value] of Object.entries(updates)) {
+      if (value === null) next.delete(key);
+      else next.set(key, value);
+    }
+    return `?${next}`;
+  };
+}
+
+function InstructorPicker({
+  instructors,
+  scope,
+}: {
+  instructors: InstructorOption[];
+  scope: AnalyticsScope;
+}) {
+  const navigate = useNavigate();
+  const hrefWith = useHrefWith();
+
+  return (
+    <Select
+      value={String(scope)}
+      onValueChange={(value) =>
+        navigate(hrefWith({ instructorId: value === "all" ? null : value }))
+      }
+    >
+      <SelectTrigger className="w-52" aria-label="Instructor">
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        <SelectItem value="all">All instructors</SelectItem>
+        {instructors.map((i) => (
+          <SelectItem key={i.id} value={String(i.id)}>
+            {i.name}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+}
+
 function RangePicker({ current }: { current: AnalyticsRange }) {
+  const hrefWith = useHrefWith();
+
   return (
     <div
       role="group"
@@ -117,7 +212,7 @@ function RangePicker({ current }: { current: AnalyticsRange }) {
       {ANALYTICS_RANGES.map((r) => (
         <Link
           key={r}
-          to={`?range=${r}`}
+          to={hrefWith({ range: r })}
           aria-current={r === current ? "page" : undefined}
           className={cn(
             "rounded-md px-3 py-1 text-sm font-medium transition-colors",
@@ -188,7 +283,152 @@ function EarningsOverview({
   );
 }
 
+function formatPercent(fraction: number | null) {
+  return fraction === null ? "—" : `${Math.round(fraction * 100)}%`;
+}
+
+function StatCard({
+  title,
+  value,
+  note,
+}: {
+  title: string;
+  value: string | number;
+  note: string;
+}) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-sm font-medium text-muted-foreground">
+          {title}
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        <p className="text-3xl font-bold tabular-nums">{value}</p>
+        <p className="mt-2 text-sm text-muted-foreground">{note}</p>
+      </CardContent>
+    </Card>
+  );
+}
+
+function StudentsOverview({
+  buyerCount,
+  studentCount,
+  averageProgress,
+  completionRate,
+  rangeLabel,
+}: {
+  buyerCount: number;
+  studentCount: number;
+  averageProgress: number | null;
+  completionRate: number | null;
+  rangeLabel: string;
+}) {
+  return (
+    <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
+      <StatCard
+        title={`Buyers · ${rangeLabel}`}
+        value={buyerCount}
+        note="People who bought, including team purchasers."
+      />
+      <StatCard
+        title={`Students · ${rangeLabel}`}
+        value={studentCount}
+        note="People who enrolled in this period."
+      />
+      <StatCard
+        title="Average progress"
+        value={formatPercent(averageProgress)}
+        note="Lessons completed, across every student. Never started counts as 0%."
+      />
+      <StatCard
+        title="Completion rate"
+        value={formatPercent(completionRate)}
+        note="Enrollments that finished the course."
+      />
+    </div>
+  );
+}
+
+function TopBuyers({
+  buyers,
+  rangeLabel,
+}: {
+  buyers: TopBuyer[];
+  rangeLabel: string;
+}) {
+  if (buyers.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center rounded-lg border border-dashed py-16 text-center">
+        <Users className="mb-4 size-12 text-muted-foreground/50" />
+        <h2 className="text-lg font-medium">No buyers in this period</h2>
+        <p className="mt-1 max-w-sm text-sm text-muted-foreground">
+          Your biggest customers will be ranked here once people buy.
+        </p>
+      </div>
+    );
+  }
+
+  const th =
+    "px-4 py-3 text-xs font-medium uppercase tracking-wider text-muted-foreground";
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-sm font-medium text-muted-foreground">
+          Top {buyers.length} buyers by total spent · {rangeLabel}
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="overflow-x-auto p-0">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b">
+              <th className={cn(th, "text-left")}>#</th>
+              <th className={cn(th, "text-left")}>Buyer</th>
+              <th className={cn(th, "text-right")}>Total spent</th>
+              <th className={cn(th, "text-right")}>Purchases</th>
+              <th className={cn(th, "text-right")}>Seats</th>
+              <th className={cn(th, "text-right")}>Last purchase</th>
+            </tr>
+          </thead>
+          <tbody>
+            {buyers.map((buyer, i) => (
+              <tr key={buyer.userId} className="border-b last:border-0">
+                <td className="px-4 py-3 tabular-nums text-muted-foreground">
+                  {i + 1}
+                </td>
+                <td className="px-4 py-3">
+                  <div className="font-medium">{buyer.name}</div>
+                  <div className="text-muted-foreground">{buyer.email}</div>
+                </td>
+                <td className="px-4 py-3 text-right font-medium tabular-nums">
+                  {formatMoney(buyer.totalSpent)}
+                </td>
+                <td className="px-4 py-3 text-right tabular-nums">
+                  {buyer.purchaseCount}
+                </td>
+                <td className="px-4 py-3 text-right tabular-nums">
+                  {buyer.seats}
+                </td>
+                <td className="px-4 py-3 text-right text-muted-foreground">
+                  {new Date(buyer.lastPurchaseAt).toLocaleDateString("en-US", {
+                    year: "numeric",
+                    month: "short",
+                    day: "numeric",
+                  })}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </CardContent>
+    </Card>
+  );
+}
+
 function NoSalesState({ range }: { range: AnalyticsRange }) {
+  const hrefWith = useHrefWith();
+
   return (
     <div className="flex flex-col items-center justify-center rounded-lg border border-dashed py-16 text-center">
       <Receipt className="mb-4 size-12 text-muted-foreground/50" />
@@ -201,7 +441,7 @@ function NoSalesState({ range }: { range: AnalyticsRange }) {
           : "Nobody has bought one of your courses in this window."}
       </p>
       {range !== "all" && (
-        <Link to="?range=all" className="mt-4">
+        <Link to={hrefWith({ range: "all" })} className="mt-4">
           <Button variant="outline">View all time</Button>
         </Link>
       )}
@@ -209,21 +449,24 @@ function NoSalesState({ range }: { range: AnalyticsRange }) {
   );
 }
 
-function NoCoursesState() {
+function NoCoursesState({ isAdmin }: { isAdmin: boolean }) {
   return (
     <div className="flex flex-col items-center justify-center py-16 text-center">
       <BarChart3 className="mb-4 size-12 text-muted-foreground/50" />
       <h2 className="text-lg font-medium">Nothing to report yet</h2>
       <p className="mt-1 max-w-sm text-sm text-muted-foreground">
-        Analytics appear once you publish a course. Your earnings, students and
-        progress will show up here.
+        {isAdmin
+          ? "There are no published or archived courses in this view yet."
+          : "Analytics appear once you publish a course. Your earnings, students and progress will show up here."}
       </p>
-      <Link to="/instructor/new" className="mt-4">
-        <Button>
-          <Plus className="mr-2 size-4" />
-          Create Course
-        </Button>
-      </Link>
+      {!isAdmin && (
+        <Link to="/instructor/new" className="mt-4">
+          <Button>
+            <Plus className="mr-2 size-4" />
+            Create Course
+          </Button>
+        </Link>
+      )}
     </div>
   );
 }

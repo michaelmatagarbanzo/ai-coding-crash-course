@@ -23,17 +23,113 @@ function daysBefore(days: number) {
   return new Date(NOW.getTime() - days * 24 * 60 * 60 * 1000).toISOString();
 }
 
-function addPurchase(courseId: number, amountPaid: number, daysAgo = 1) {
-  testDb
+function addPurchase(
+  courseId: number,
+  amountPaid: number,
+  daysAgo = 1,
+  userId = base.user.id
+) {
+  return testDb
     .insert(schema.purchases)
     .values({
-      userId: base.user.id,
+      userId,
       courseId,
       amountPaid,
       country: "US",
       createdAt: daysBefore(daysAgo),
     })
+    .returning()
+    .get();
+}
+
+let userCounter = 0;
+
+function addUser(
+  name = `Student ${++userCounter}`,
+  role: schema.UserRole = schema.UserRole.Student
+) {
+  return testDb
+    .insert(schema.users)
+    .values({
+      name,
+      email: `${name.toLowerCase().replace(/\s+/g, "-")}@example.com`,
+      role,
+    })
+    .returning()
+    .get();
+}
+
+/** A team purchase: one purchase row plus one coupon per seat. */
+function addTeamPurchase(
+  courseId: number,
+  amountPaid: number,
+  seats: number,
+  daysAgo = 1,
+  userId = base.user.id
+) {
+  const purchase = addPurchase(courseId, amountPaid, daysAgo, userId);
+  const team = testDb.insert(schema.teams).values({}).returning().get();
+  for (let i = 0; i < seats; i++) {
+    testDb
+      .insert(schema.coupons)
+      .values({
+        teamId: team.id,
+        courseId,
+        purchaseId: purchase.id,
+        code: `${purchase.id}-${i}`,
+      })
+      .run();
+  }
+  return purchase;
+}
+
+function enroll(
+  userId: number,
+  courseId: number,
+  daysAgo = 1,
+  completed = false
+) {
+  testDb
+    .insert(schema.enrollments)
+    .values({
+      userId,
+      courseId,
+      enrolledAt: daysBefore(daysAgo),
+      completedAt: completed ? daysBefore(0) : null,
+    })
     .run();
+}
+
+/** Adds one module holding `count` lessons and returns the lesson ids. */
+function addLessons(courseId: number, count: number) {
+  const mod = testDb
+    .insert(schema.modules)
+    .values({ courseId, title: "Module", position: 1 })
+    .returning()
+    .get();
+  return Array.from(
+    { length: count },
+    (_, i) =>
+      testDb
+        .insert(schema.lessons)
+        .values({ moduleId: mod.id, title: `Lesson ${i + 1}`, position: i + 1 })
+        .returning()
+        .get().id
+  );
+}
+
+function completeLessons(userId: number, lessonIds: number[]) {
+  for (const lessonId of lessonIds) {
+    testDb
+      .insert(schema.lessonProgress)
+      .values({
+        userId,
+        lessonId,
+        status: schema.LessonProgressStatus.Completed,
+        completedAt: daysBefore(0),
+      })
+      .run();
+  }
 }
 
 function addCourse(
@@ -80,6 +176,11 @@ describe("analyticsService", () => {
         courseCount: 0,
         salesCount: 0,
         earnings: { gross: 0, platformFee: 0, net: 0 },
+        buyerCount: 0,
+        studentCount: 0,
+        averageProgress: null,
+        completionRate: null,
+        topBuyers: [],
       });
     });
 
@@ -184,6 +285,248 @@ describe("analyticsService", () => {
       const analytics = getInstructorAnalytics(base.instructor.id, "all", NOW);
 
       expect(analytics.earnings).toEqual({ gross: 9, platformFee: 2, net: 7 });
+    });
+  });
+
+  describe("getInstructorAnalytics — buyers and students", () => {
+    it("counts a team purchase as one buyer and its members as several students", () => {
+      const lead = addUser("Team Lead");
+      const [a, b, c] = [addUser(), addUser(), addUser()];
+      addTeamPurchase(base.course.id, 4999 * 3, 3, 1, lead.id);
+      for (const s of [a, b, c]) enroll(s.id, base.course.id);
+
+      const analytics = getInstructorAnalytics(base.instructor.id, "all", NOW);
+
+      expect(analytics.buyerCount).toBe(1);
+      expect(analytics.studentCount).toBe(3);
+    });
+
+    it("counts buyers by purchase date for the range", () => {
+      addPurchase(base.course.id, 1000, 10, addUser().id);
+      addPurchase(base.course.id, 1000, 60, addUser().id);
+
+      const buyers = (range: AnalyticsRange) =>
+        getInstructorAnalytics(base.instructor.id, range, NOW).buyerCount;
+
+      expect(buyers("30d")).toBe(1);
+      expect(buyers("90d")).toBe(2);
+    });
+  });
+
+  describe("getInstructorAnalytics — progress and completion", () => {
+    it("averages lessons completed ÷ total lessons, counting never-started students as 0%", () => {
+      const lessons = addLessons(base.course.id, 4);
+      const [halfway, allDone, neverStarted] = [
+        addUser(),
+        addUser(),
+        addUser(),
+      ];
+      for (const s of [halfway, allDone, neverStarted]) {
+        enroll(s.id, base.course.id);
+      }
+      completeLessons(halfway.id, lessons.slice(0, 2));
+      completeLessons(allDone.id, lessons);
+
+      const analytics = getInstructorAnalytics(base.instructor.id, "all", NOW);
+
+      // (0.5 + 1 + 0) / 3
+      expect(analytics.averageProgress).toBeCloseTo(0.5);
+    });
+
+    it("pools every student across courses rather than averaging course averages", () => {
+      const small = addCourse(base.instructor.id, "small-course");
+      addLessons(base.course.id, 2);
+      const smallLessons = addLessons(small.id, 1);
+
+      // Big course: three students at 0%. Small course: one student at 100%.
+      for (let i = 0; i < 3; i++) enroll(addUser().id, base.course.id);
+      const finisher = addUser();
+      enroll(finisher.id, small.id);
+      completeLessons(finisher.id, smallLessons);
+
+      const analytics = getInstructorAnalytics(base.instructor.id, "all", NOW);
+
+      // Pooled: (0 + 0 + 0 + 1) / 4 = 25%. A mean of course means would be 50%.
+      expect(analytics.averageProgress).toBeCloseTo(0.25);
+    });
+
+    it("only counts completed lessons from the student's own course", () => {
+      const other = addCourse(base.instructor.id, "other-course");
+      addLessons(base.course.id, 2);
+      const otherLessons = addLessons(other.id, 2);
+      const student = addUser();
+      enroll(student.id, base.course.id);
+      completeLessons(student.id, otherLessons);
+
+      const analytics = getInstructorAnalytics(base.instructor.id, "all", NOW);
+
+      expect(analytics.averageProgress).toBe(0);
+    });
+
+    it("reports the share of enrollments that completed the course", () => {
+      addLessons(base.course.id, 1);
+      enroll(addUser().id, base.course.id, 1, true);
+      for (let i = 0; i < 3; i++) enroll(addUser().id, base.course.id);
+
+      const analytics = getInstructorAnalytics(base.instructor.id, "all", NOW);
+
+      expect(analytics.completionRate).toBeCloseTo(0.25);
+    });
+
+    it("selects students by enrollment date for the range, not purchase date", () => {
+      const lessons = addLessons(base.course.id, 2);
+      const recent = addUser();
+      const older = addUser();
+      // The recent student bought long ago but only enrolled recently.
+      addPurchase(base.course.id, 1000, 200, recent.id);
+      enroll(recent.id, base.course.id, 10);
+      enroll(older.id, base.course.id, 60, true);
+      completeLessons(older.id, lessons);
+
+      const last30 = getInstructorAnalytics(base.instructor.id, "30d", NOW);
+      const all = getInstructorAnalytics(base.instructor.id, "all", NOW);
+
+      expect(last30.studentCount).toBe(1);
+      expect(last30.averageProgress).toBe(0);
+      expect(last30.completionRate).toBe(0);
+      expect(all.studentCount).toBe(2);
+      expect(all.averageProgress).toBeCloseTo(0.5);
+      expect(all.completionRate).toBeCloseTo(0.5);
+    });
+
+    it("reports no averages, rather than 0%, when nobody enrolled in range", () => {
+      enroll(addUser().id, base.course.id, 60);
+
+      const analytics = getInstructorAnalytics(base.instructor.id, "30d", NOW);
+
+      expect(analytics.studentCount).toBe(0);
+      expect(analytics.averageProgress).toBeNull();
+      expect(analytics.completionRate).toBeNull();
+    });
+  });
+
+  describe("getInstructorAnalytics — top buyers", () => {
+    it("ranks buyers by total spent with purchases, seats and last purchase date", () => {
+      const second = addCourse(base.instructor.id, "second-course");
+      const big = addUser("Big Spender");
+      const small = addUser("Small Spender");
+      addPurchase(base.course.id, 4999, 20, big.id);
+      addTeamPurchase(second.id, 9000, 3, 5, big.id);
+      addPurchase(base.course.id, 2500, 2, small.id);
+
+      const { topBuyers } = getInstructorAnalytics(
+        base.instructor.id,
+        "all",
+        NOW
+      );
+
+      expect(topBuyers).toEqual([
+        {
+          userId: big.id,
+          name: "Big Spender",
+          email: "big-spender@example.com",
+          totalSpent: 13999,
+          purchaseCount: 2,
+          seats: 4, // 1 for the solo purchase + 3 team seats
+          lastPurchaseAt: daysBefore(5),
+        },
+        {
+          userId: small.id,
+          name: "Small Spender",
+          email: "small-spender@example.com",
+          totalSpent: 2500,
+          purchaseCount: 1,
+          seats: 1,
+          lastPurchaseAt: daysBefore(2),
+        },
+      ]);
+    });
+
+    it("keeps only the top 10", () => {
+      const buyers = Array.from({ length: 12 }, (_, i) => {
+        const buyer = addUser(`Buyer ${i + 1}`);
+        addPurchase(base.course.id, (i + 1) * 100, 1, buyer.id);
+        return buyer;
+      });
+
+      const { topBuyers } = getInstructorAnalytics(
+        base.instructor.id,
+        "all",
+        NOW
+      );
+
+      expect(topBuyers.map((b) => b.userId)).toEqual(
+        buyers
+          .slice(2)
+          .reverse()
+          .map((b) => b.id)
+      );
+    });
+
+    it("only counts purchases within the range", () => {
+      const buyer = addUser("Returning Buyer");
+      addPurchase(base.course.id, 5000, 100, buyer.id);
+      addPurchase(base.course.id, 1000, 10, buyer.id);
+      const lapsed = addUser("Lapsed Buyer");
+      addPurchase(base.course.id, 9000, 100, lapsed.id);
+
+      const { topBuyers } = getInstructorAnalytics(
+        base.instructor.id,
+        "30d",
+        NOW
+      );
+
+      expect(topBuyers).toHaveLength(1);
+      expect(topBuyers[0]).toMatchObject({
+        userId: buyer.id,
+        totalSpent: 1000,
+        purchaseCount: 1,
+      });
+    });
+  });
+
+  describe("getInstructorAnalytics — instructor scoping", () => {
+    function twoInstructors() {
+      const other = addUser("Other Instructor", schema.UserRole.Instructor);
+      const otherCourse = addCourse(other.id, "other-instructor-course");
+      const mine = addUser("My Buyer");
+      const theirs = addUser("Their Buyer");
+      addPurchase(base.course.id, 1000, 1, mine.id);
+      addPurchase(otherCourse.id, 3000, 1, theirs.id);
+      enroll(mine.id, base.course.id);
+      enroll(theirs.id, otherCourse.id);
+      return { mine, theirs };
+    }
+
+    it("never shows another instructor's buyers or students", () => {
+      const { mine } = twoInstructors();
+
+      const analytics = getInstructorAnalytics(base.instructor.id, "all", NOW);
+
+      expect(analytics.buyerCount).toBe(1);
+      expect(analytics.studentCount).toBe(1);
+      expect(analytics.topBuyers.map((b) => b.userId)).toEqual([mine.id]);
+    });
+
+    it('spans every instructor\'s in-scope courses in "all" mode', () => {
+      const { mine, theirs } = twoInstructors();
+      const draft = addCourse(
+        base.instructor.id,
+        "draft-course",
+        schema.CourseStatus.Draft
+      );
+      addPurchase(draft.id, 99999, 1, addUser().id);
+
+      const analytics = getInstructorAnalytics("all", "all", NOW);
+
+      expect(analytics.courseCount).toBe(2);
+      expect(analytics.earnings.gross).toBe(4000);
+      expect(analytics.buyerCount).toBe(2);
+      expect(analytics.studentCount).toBe(2);
+      expect(analytics.topBuyers.map((b) => b.userId)).toEqual([
+        theirs.id,
+        mine.id,
+      ]);
     });
   });
 });
