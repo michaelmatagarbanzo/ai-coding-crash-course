@@ -13,6 +13,7 @@ vi.mock("~/db", () => ({
 
 // Import after mock so the module picks up our test db
 import {
+  getCourseAnalytics,
   getInstructorAnalytics,
   type AnalyticsRange,
 } from "./analyticsService";
@@ -101,10 +102,15 @@ function enroll(
 }
 
 /** Adds one module holding `count` lessons and returns the lesson ids. */
-function addLessons(courseId: number, count: number) {
+function addLessons(
+  courseId: number,
+  count: number,
+  moduleTitle = "Module",
+  modulePosition = 1
+) {
   const mod = testDb
     .insert(schema.modules)
-    .values({ courseId, title: "Module", position: 1 })
+    .values({ courseId, title: moduleTitle, position: modulePosition })
     .returning()
     .get();
   return Array.from(
@@ -181,6 +187,7 @@ describe("analyticsService", () => {
         averageProgress: null,
         completionRate: null,
         topBuyers: [],
+        courses: [],
       });
     });
 
@@ -527,6 +534,268 @@ describe("analyticsService", () => {
         theirs.id,
         mine.id,
       ]);
+    });
+  });
+  describe("getInstructorAnalytics — per-course rows", () => {
+    it("lists one row per in-scope course with its own figures", () => {
+      const second = addCourse(base.instructor.id, "second-course");
+      addCourse(base.instructor.id, "draft-course", schema.CourseStatus.Draft);
+      const lessons = addLessons(second.id, 2);
+      addPurchase(base.course.id, 1000, 1, addUser().id);
+      addPurchase(base.course.id, 2000, 1, addUser().id);
+      const finisher = addUser();
+      addPurchase(second.id, 500, 1, finisher.id);
+      enroll(finisher.id, second.id, 1, true);
+      completeLessons(finisher.id, lessons);
+
+      const { courses } = getInstructorAnalytics(
+        base.instructor.id,
+        "all",
+        NOW
+      );
+
+      expect(courses).toEqual([
+        {
+          courseId: base.course.id,
+          title: "Test Course",
+          salesCount: 2,
+          earnings: { gross: 3000, platformFee: 600, net: 2400 },
+          buyerCount: 2,
+          studentCount: 0,
+          averageProgress: null,
+          completionRate: null,
+        },
+        {
+          courseId: second.id,
+          title: "second-course",
+          salesCount: 1,
+          earnings: { gross: 500, platformFee: 100, net: 400 },
+          buyerCount: 1,
+          studentCount: 1,
+          averageProgress: 1,
+          completionRate: 1,
+        },
+      ]);
+    });
+
+    it("respects the range in each row", () => {
+      addPurchase(base.course.id, 1000, 10);
+      addPurchase(base.course.id, 2000, 60);
+
+      const [row] = getInstructorAnalytics(base.instructor.id, "30d", NOW)
+        .courses;
+
+      expect(row.salesCount).toBe(1);
+      expect(row.earnings.gross).toBe(1000);
+    });
+  });
+
+  describe("getCourseAnalytics — figures", () => {
+    it("reports earnings, counts, progress and completion for that course only", () => {
+      const other = addCourse(base.instructor.id, "other-course");
+      const lessons = addLessons(base.course.id, 2);
+      const [a, b] = [addUser(), addUser()];
+      addPurchase(base.course.id, 4999, 1, a.id);
+      addPurchase(other.id, 9999, 1, b.id);
+      enroll(a.id, base.course.id, 1, true);
+      completeLessons(a.id, lessons);
+      enroll(b.id, base.course.id);
+      enroll(b.id, other.id);
+
+      const analytics = getCourseAnalytics(
+        base.instructor.id,
+        base.course.id,
+        "all",
+        NOW
+      );
+
+      expect(analytics).toMatchObject({
+        course: { id: base.course.id, title: "Test Course" },
+        salesCount: 1,
+        earnings: { gross: 4999, platformFee: 1000, net: 3999 },
+        buyerCount: 1,
+        studentCount: 2,
+        averageProgress: 0.5,
+        completionRate: 0.5,
+      });
+    });
+
+    it("respects the range", () => {
+      addPurchase(base.course.id, 1000, 10);
+      addPurchase(base.course.id, 2000, 60);
+      enroll(addUser().id, base.course.id, 10);
+      enroll(addUser().id, base.course.id, 60);
+
+      const analytics = getCourseAnalytics(
+        base.instructor.id,
+        base.course.id,
+        "30d",
+        NOW
+      )!;
+
+      expect(analytics.salesCount).toBe(1);
+      expect(analytics.earnings.gross).toBe(1000);
+      expect(analytics.studentCount).toBe(1);
+    });
+  });
+
+  describe("getCourseAnalytics — access scoping", () => {
+    it("is unavailable for another instructor's course", () => {
+      const other = addUser("Other Instructor", schema.UserRole.Instructor);
+      const theirs = addCourse(other.id, "their-course");
+
+      expect(
+        getCourseAnalytics(base.instructor.id, theirs.id, "all", NOW)
+      ).toBeNull();
+    });
+
+    it('is available for any instructor\'s course in "all" mode', () => {
+      const other = addUser("Other Instructor", schema.UserRole.Instructor);
+      const theirs = addCourse(other.id, "their-course");
+
+      expect(getCourseAnalytics("all", theirs.id, "all", NOW)).toMatchObject({
+        course: { id: theirs.id },
+      });
+    });
+
+    it("is unavailable for drafts and missing courses", () => {
+      const draft = addCourse(
+        base.instructor.id,
+        "draft-course",
+        schema.CourseStatus.Draft
+      );
+
+      expect(getCourseAnalytics("all", draft.id, "all", NOW)).toBeNull();
+      expect(getCourseAnalytics("all", 99999, "all", NOW)).toBeNull();
+    });
+
+    it("includes archived courses", () => {
+      const archived = addCourse(
+        base.instructor.id,
+        "archived-course",
+        schema.CourseStatus.Archived
+      );
+
+      expect(
+        getCourseAnalytics(base.instructor.id, archived.id, "all", NOW)
+      ).not.toBeNull();
+    });
+  });
+
+  describe("getCourseAnalytics — drop-off", () => {
+    /** Two modules, added out of order to prove ordering is by position. */
+    function twoModuleCourse() {
+      const [l3, l4] = addLessons(base.course.id, 2, "Second module", 2);
+      const [l1, l2] = addLessons(base.course.id, 2, "First module", 1);
+      return [l1, l2, l3, l4];
+    }
+
+    function dropOff(range: AnalyticsRange = "all") {
+      return getCourseAnalytics(base.instructor.id, base.course.id, range, NOW)!
+        .dropOff;
+    }
+
+    it("buckets students as never started, by furthest lesson, and finished, in course order", () => {
+      const [l1, l2, l3] = twoModuleCourse();
+      enroll(addUser().id, base.course.id); // never started
+      const atL1 = addUser();
+      enroll(atL1.id, base.course.id);
+      completeLessons(atL1.id, [l1]);
+      const atL3 = addUser();
+      enroll(atL3.id, base.course.id);
+      completeLessons(atL3.id, [l1, l2, l3]);
+      const finisher = addUser();
+      enroll(finisher.id, base.course.id, 1, true);
+
+      expect(dropOff().buckets).toEqual([
+        { kind: "never_started", label: "Never started", count: 1 },
+        {
+          kind: "lesson",
+          lessonId: l1,
+          label: "Lesson 1",
+          moduleTitle: "First module",
+          count: 1,
+        },
+        {
+          kind: "lesson",
+          lessonId: l2,
+          label: "Lesson 2",
+          moduleTitle: "First module",
+          count: 0,
+        },
+        {
+          kind: "lesson",
+          lessonId: l3,
+          label: "Lesson 1",
+          moduleTitle: "Second module",
+          count: 1,
+        },
+        {
+          kind: "lesson",
+          lessonId: expect.any(Number),
+          label: "Lesson 2",
+          moduleTitle: "Second module",
+          count: 0,
+        },
+        { kind: "finished", label: "Finished", count: 1 },
+      ]);
+    });
+
+    it("buckets skip-ahead students at their furthest completed lesson", () => {
+      const [l1, , , l4] = twoModuleCourse();
+      const skipper = addUser();
+      enroll(skipper.id, base.course.id);
+      completeLessons(skipper.id, [l1, l4]);
+
+      const counts = dropOff().buckets.map((b) => b.count);
+
+      expect(counts).toEqual([0, 0, 0, 0, 1, 0]);
+    });
+
+    it("ignores progress in other courses", () => {
+      twoModuleCourse();
+      const otherLessons = addLessons(
+        addCourse(base.instructor.id, "other").id,
+        1
+      );
+      const student = addUser();
+      enroll(student.id, base.course.id);
+      completeLessons(student.id, otherLessons);
+
+      expect(dropOff().buckets[0].count).toBe(1);
+    });
+
+    it("highlights the lesson with the most stoppers, ignoring never started and finished", () => {
+      const [l1, l2] = twoModuleCourse();
+      for (let i = 0; i < 5; i++) enroll(addUser().id, base.course.id);
+      for (let i = 0; i < 5; i++) enroll(addUser().id, base.course.id, 1, true);
+      const stopper = addUser();
+      enroll(stopper.id, base.course.id);
+      completeLessons(stopper.id, [l1]);
+      for (let i = 0; i < 2; i++) {
+        const s = addUser();
+        enroll(s.id, base.course.id);
+        completeLessons(s.id, [l1, l2]);
+      }
+
+      expect(dropOff().mostStoppedLessonId).toBe(l2);
+    });
+
+    it("highlights no lesson when nobody stopped mid-course", () => {
+      twoModuleCourse();
+      enroll(addUser().id, base.course.id);
+      enroll(addUser().id, base.course.id, 1, true);
+
+      expect(dropOff().mostStoppedLessonId).toBeNull();
+    });
+
+    it("only buckets the cohort enrolled in range", () => {
+      twoModuleCourse();
+      enroll(addUser().id, base.course.id, 10);
+      enroll(addUser().id, base.course.id, 60);
+
+      expect(dropOff("30d").buckets[0].count).toBe(1);
+      expect(dropOff("all").buckets[0].count).toBe(2);
     });
   });
 });

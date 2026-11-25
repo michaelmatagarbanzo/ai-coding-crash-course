@@ -5,6 +5,9 @@ import {
   LessonProgressStatus,
   courses,
   enrollments,
+  lessonProgress,
+  lessons,
+  modules,
   purchases,
   users,
 } from "~/db/schema";
@@ -38,20 +41,21 @@ export type AnalyticsScope = number | "all";
 /**
  * The courses the analytics cover: published and archived courses — one
  * instructor's own, or every instructor's in "all" mode. Drafts have never
- * been on sale.
+ * been on sale. Pass `courseId` to look for just that one.
  */
-function getCourseIdsInScope(scope: AnalyticsScope): number[] {
+function getCoursesInScope(scope: AnalyticsScope, courseId?: number) {
   return db
-    .select({ id: courses.id })
+    .select({ id: courses.id, title: courses.title })
     .from(courses)
     .where(
       and(
         scope === "all" ? undefined : eq(courses.instructorId, scope),
-        ne(courses.status, CourseStatus.Draft)
+        ne(courses.status, CourseStatus.Draft),
+        courseId === undefined ? undefined : eq(courses.id, courseId)
       )
     )
-    .all()
-    .map((c) => c.id);
+    .orderBy(asc(courses.title), asc(courses.id))
+    .all();
 }
 
 /**
@@ -150,42 +154,186 @@ function getTopBuyers(courseIds: number[], since: string | null) {
     .all();
 }
 
-export function getInstructorAnalytics(
-  scope: AnalyticsScope,
-  range: AnalyticsRange,
-  now: Date
-) {
-  const courseIds = getCourseIdsInScope(scope);
-  const since = rangeStart(range, now);
+/** Sales and buyer figures for purchases of the given courses in range. */
+function getSalesFigures(courseIds: number[], since: string | null) {
+  if (courseIds.length === 0) return { count: 0, buyers: 0, gross: 0 };
 
-  const sales =
-    courseIds.length === 0
-      ? { count: 0, buyers: 0, gross: 0 }
-      : db
-          .select({
-            count: sql<number>`count(*)`,
-            buyers: sql<number>`count(distinct ${purchases.userId})`,
-            gross: sql<number>`coalesce(sum(${purchases.amountPaid}), 0)`,
-          })
-          .from(purchases)
-          .where(
-            and(
-              inArray(purchases.courseId, courseIds),
-              since ? gte(purchases.createdAt, since) : undefined
-            )
-          )
-          .get()!;
+  return db
+    .select({
+      count: sql<number>`count(*)`,
+      buyers: sql<number>`count(distinct ${purchases.userId})`,
+      gross: sql<number>`coalesce(sum(${purchases.amountPaid}), 0)`,
+    })
+    .from(purchases)
+    .where(
+      and(
+        inArray(purchases.courseId, courseIds),
+        since ? gte(purchases.createdAt, since) : undefined
+      )
+    )
+    .get()!;
+}
 
+/** The headline figures for a set of courses — shared by every view. */
+function getHeadlineFigures(courseIds: number[], since: string | null) {
+  const sales = getSalesFigures(courseIds, since);
   const students = getStudentFigures(courseIds, since);
 
   return {
-    courseCount: courseIds.length,
     salesCount: sales.count,
     earnings: splitEarnings(sales.gross),
     buyerCount: sales.buyers,
     studentCount: students.count,
     averageProgress: students.averageProgress,
     completionRate: students.completionRate,
-    topBuyers: getTopBuyers(courseIds, since),
   };
+}
+
+export function getInstructorAnalytics(
+  scope: AnalyticsScope,
+  range: AnalyticsRange,
+  now: Date
+) {
+  const inScope = getCoursesInScope(scope);
+  const courseIds = inScope.map((c) => c.id);
+  const since = rangeStart(range, now);
+
+  return {
+    courseCount: courseIds.length,
+    ...getHeadlineFigures(courseIds, since),
+    topBuyers: getTopBuyers(courseIds, since),
+    courses: inScope.map((course) => ({
+      courseId: course.id,
+      title: course.title,
+      ...getHeadlineFigures([course.id], since),
+    })),
+  };
+}
+
+/**
+ * The deep dive for one course, or null when it is a draft, missing, or
+ * outside the scope (another instructor's course).
+ */
+export function getCourseAnalytics(
+  scope: AnalyticsScope,
+  courseId: number,
+  range: AnalyticsRange,
+  now: Date
+) {
+  const [course] = getCoursesInScope(scope, courseId);
+  if (!course) return null;
+  const since = rangeStart(range, now);
+
+  return {
+    course,
+    ...getHeadlineFigures([course.id], since),
+    dropOff: getDropOff(course.id, since),
+  };
+}
+
+// ─── Drop-off (experimental) ───
+// Self-contained so it can be reworked or removed after evaluation.
+
+export type DropOffBucket =
+  | { kind: "never_started"; label: string; count: number }
+  | {
+      kind: "lesson";
+      lessonId: number;
+      label: string;
+      moduleTitle: string;
+      count: number;
+    }
+  | { kind: "finished"; label: string; count: number };
+
+/**
+ * Buckets each student enrolled in range by their furthest completed lesson in
+ * course order (module position, then lesson position). Students who completed
+ * the course are "Finished"; those with no completed lesson "Never started".
+ * Skip-ahead students land at their furthest lesson — an accepted quirk. The
+ * most-stopped lesson ignores the never-started and finished buckets.
+ */
+function getDropOff(courseId: number, since: string | null) {
+  const courseLessons = db
+    .select({
+      id: lessons.id,
+      title: lessons.title,
+      moduleTitle: modules.title,
+    })
+    .from(lessons)
+    .innerJoin(modules, eq(lessons.moduleId, modules.id))
+    .where(eq(modules.courseId, courseId))
+    .orderBy(asc(modules.position), asc(lessons.position), asc(lessons.id))
+    .all();
+
+  const cohort = db
+    .select({
+      userId: enrollments.userId,
+      completedAt: enrollments.completedAt,
+    })
+    .from(enrollments)
+    .where(
+      and(
+        eq(enrollments.courseId, courseId),
+        since ? gte(enrollments.enrolledAt, since) : undefined
+      )
+    )
+    .all();
+
+  const lessonIndex = new Map(courseLessons.map((l, i) => [l.id, i]));
+  const furthest = new Map<number, number>();
+
+  if (courseLessons.length > 0 && cohort.length > 0) {
+    const completions = db
+      .select({
+        userId: lessonProgress.userId,
+        lessonId: lessonProgress.lessonId,
+      })
+      .from(lessonProgress)
+      .where(
+        and(
+          eq(lessonProgress.status, LessonProgressStatus.Completed),
+          inArray(lessonProgress.lessonId, [...lessonIndex.keys()]),
+          inArray(
+            lessonProgress.userId,
+            cohort.map((c) => c.userId)
+          )
+        )
+      )
+      .all();
+
+    for (const { userId, lessonId } of completions) {
+      const index = lessonIndex.get(lessonId)!;
+      furthest.set(userId, Math.max(furthest.get(userId) ?? -1, index));
+    }
+  }
+
+  let neverStarted = 0;
+  let finished = 0;
+  const lessonCounts = courseLessons.map(() => 0);
+
+  for (const { userId, completedAt } of cohort) {
+    const index = furthest.get(userId);
+    if (completedAt) finished++;
+    else if (index === undefined) neverStarted++;
+    else lessonCounts[index]++;
+  }
+
+  const buckets: DropOffBucket[] = [
+    { kind: "never_started", label: "Never started", count: neverStarted },
+    ...courseLessons.map((l, i) => ({
+      kind: "lesson" as const,
+      lessonId: l.id,
+      label: l.title,
+      moduleTitle: l.moduleTitle,
+      count: lessonCounts[i],
+    })),
+    { kind: "finished", label: "Finished", count: finished },
+  ];
+
+  // Earliest lesson wins a tie.
+  const top = Math.max(0, ...lessonCounts);
+  const mostStoppedLessonId =
+    top === 0 ? null : courseLessons[lessonCounts.indexOf(top)].id;
+
+  return { buckets, mostStoppedLessonId };
 }
