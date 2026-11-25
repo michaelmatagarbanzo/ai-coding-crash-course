@@ -249,14 +249,14 @@ describe("progressService", () => {
         .returning()
         .get();
 
-      const progress = calculateProgress(base.user.id, emptyCourse.id, false, false);
+      const progress = calculateProgress(base.user.id, emptyCourse.id);
       expect(progress).toBe(0);
     });
 
     it("returns 0 when no lessons are completed", () => {
       createModuleWithLessons(base.course.id, "Module 1", 1, 4);
 
-      const progress = calculateProgress(base.user.id, base.course.id, false, false);
+      const progress = calculateProgress(base.user.id, base.course.id);
       expect(progress).toBe(0);
     });
 
@@ -267,7 +267,7 @@ describe("progressService", () => {
         markLessonComplete(base.user.id, lesson.id);
       }
 
-      const progress = calculateProgress(base.user.id, base.course.id, false, false);
+      const progress = calculateProgress(base.user.id, base.course.id);
       expect(progress).toBe(100);
     });
 
@@ -277,7 +277,7 @@ describe("progressService", () => {
       markLessonComplete(base.user.id, lessons[0].id);
       markLessonComplete(base.user.id, lessons[1].id);
 
-      const progress = calculateProgress(base.user.id, base.course.id, false, false);
+      const progress = calculateProgress(base.user.id, base.course.id);
       expect(progress).toBe(50); // 2/4 = 50%
     });
 
@@ -287,7 +287,7 @@ describe("progressService", () => {
       markLessonComplete(base.user.id, lessons[0].id);
       markLessonInProgress(base.user.id, lessons[1].id);
 
-      const progress = calculateProgress(base.user.id, base.course.id, false, false);
+      const progress = calculateProgress(base.user.id, base.course.id);
       expect(progress).toBe(25); // 1/4 = 25%
     });
 
@@ -298,7 +298,7 @@ describe("progressService", () => {
       markLessonComplete(base.user.id, m1.lessons[0].id);
       markLessonComplete(base.user.id, m2.lessons[0].id);
 
-      const progress = calculateProgress(base.user.id, base.course.id, false, false);
+      const progress = calculateProgress(base.user.id, base.course.id);
       expect(progress).toBe(50); // 2/4 = 50%
     });
 
@@ -307,81 +307,8 @@ describe("progressService", () => {
 
       markLessonComplete(base.user.id, lessons[0].id);
 
-      const progress = calculateProgress(base.user.id, base.course.id, false, false);
+      const progress = calculateProgress(base.user.id, base.course.id);
       expect(progress).toBe(33); // 1/3 = 33.33... → 33
-    });
-  });
-
-  describe("calculateProgress — weight by duration", () => {
-    it("weights progress by lesson duration", () => {
-      const mod = testDb
-        .insert(schema.modules)
-        .values({ courseId: base.course.id, title: "Module 1", position: 1 })
-        .returning()
-        .get();
-
-      const lesson1 = testDb
-        .insert(schema.lessons)
-        .values({ moduleId: mod.id, title: "Short Lesson", position: 1, durationMinutes: 10 })
-        .returning()
-        .get();
-
-      const lesson2 = testDb
-        .insert(schema.lessons)
-        .values({ moduleId: mod.id, title: "Long Lesson", position: 2, durationMinutes: 30 })
-        .returning()
-        .get();
-
-      // Complete only the short lesson (10 out of 40 total minutes)
-      markLessonComplete(base.user.id, lesson1.id);
-
-      const progress = calculateProgress(base.user.id, base.course.id, false, true);
-      expect(progress).toBe(25); // 10/40 = 25%
-    });
-
-    it("uses duration 1 as fallback for lessons with null duration", () => {
-      const mod = testDb
-        .insert(schema.modules)
-        .values({ courseId: base.course.id, title: "Module 1", position: 1 })
-        .returning()
-        .get();
-
-      const lesson1 = testDb
-        .insert(schema.lessons)
-        .values({ moduleId: mod.id, title: "Timed Lesson", position: 1, durationMinutes: 9 })
-        .returning()
-        .get();
-
-      testDb
-        .insert(schema.lessons)
-        .values({ moduleId: mod.id, title: "No Duration", position: 2 })
-        .returning()
-        .get();
-
-      // Complete only the timed lesson (9 out of 10 total minutes)
-      markLessonComplete(base.user.id, lesson1.id);
-
-      const progress = calculateProgress(base.user.id, base.course.id, false, true);
-      expect(progress).toBe(90); // 9/10 = 90%
-    });
-
-    it("returns 0 for empty course with weight by duration", () => {
-      const emptyCourse = testDb
-        .insert(schema.courses)
-        .values({
-          title: "Empty",
-          slug: "empty",
-          description: "Empty",
-          salesCopy: "Sales copy.",
-          instructorId: base.instructor.id,
-          categoryId: base.category.id,
-          status: schema.CourseStatus.Published,
-        })
-        .returning()
-        .get();
-
-      const progress = calculateProgress(base.user.id, emptyCourse.id, false, true);
-      expect(progress).toBe(0);
     });
   });
 

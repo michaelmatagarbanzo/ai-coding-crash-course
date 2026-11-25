@@ -2,12 +2,25 @@ import { Form, Link, useActionData, useNavigation, useSearchParams } from "react
 import { redirect, data } from "react-router";
 import { z } from "zod";
 import type { Route } from "./+types/login";
-import { getUserByEmail } from "~/services/userService";
+import { getUserByEmail, getUserById } from "~/services/userService";
+import { UserRole } from "~/db/schema";
 import { setCurrentUserId, getCurrentUserId } from "~/lib/session";
 import { parseFormData } from "~/lib/validation";
 import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
 import { Card, CardContent } from "~/components/ui/card";
+
+/**
+ * Where to send someone after login: an explicit local `redirectTo` wins;
+ * otherwise instructors land on their analytics and everyone else on courses.
+ */
+function loginDestination(
+  redirectTo: string | null,
+  role: UserRole | undefined
+) {
+  if (redirectTo && redirectTo.startsWith("/")) return redirectTo;
+  return role === UserRole.Instructor ? "/instructor/analytics" : "/courses";
+}
 
 const loginSchema = z.object({
   email: z
@@ -28,8 +41,10 @@ export function meta() {
 export async function loader({ request, url }: Route.LoaderArgs) {
   const currentUserId = await getCurrentUserId(request);
   if (currentUserId) {
-    const redirectTo = url.searchParams.get("redirectTo");
-    const destination = redirectTo && redirectTo.startsWith("/") ? redirectTo : "/courses";
+    const destination = loginDestination(
+      url.searchParams.get("redirectTo"),
+      getUserById(currentUserId)?.role
+    );
     throw redirect(destination);
   }
   return {};
@@ -59,8 +74,10 @@ export async function action({ request, url }: Route.ActionArgs) {
     );
   }
 
-  const redirectTo = url.searchParams.get("redirectTo");
-  const destination = redirectTo && redirectTo.startsWith("/") ? redirectTo : "/courses";
+  const destination = loginDestination(
+    url.searchParams.get("redirectTo"),
+    user.role
+  );
 
   const cookie = await setCurrentUserId(request, user.id);
   throw redirect(destination, {

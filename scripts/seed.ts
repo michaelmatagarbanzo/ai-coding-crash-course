@@ -12,6 +12,7 @@ import {
   QuestionType,
   TeamMemberRole,
 } from "../app/db/schema";
+import { calculatePppPrice } from "../app/lib/ppp";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -1913,18 +1914,200 @@ You've completed the Building REST APIs course. You now have the skills to build
     `Created 1 team with Bossy McBossface as admin, 1 team purchase, and ${seededCoupons.length} coupons (2 redeemed, 3 available).`
   );
 
+  // ─── Analytics Cohort ───
+  // A wider spread of buyers and learners so Instructor Analytics has something
+  // meaningful to show: purchases priced through PPP from every tier, enrollment
+  // dates spread across the 30/90-day windows, and progress covering never
+  // started, stalled mid-course, and finished.
+
+  type CohortMember = {
+    name: string;
+    country: string;
+    course: typeof course1;
+    lessonIds: number[];
+    enrolledDaysAgo: number;
+    lessonsCompleted: number | "all";
+  };
+
+  const cohort: CohortMember[] = [
+    // Course 1 — Introduction to TypeScript
+    { name: "Ava Chen", country: "SG", course: course1, lessonIds: course1LessonIds, enrolledDaysAgo: 85, lessonsCompleted: "all" },
+    { name: "Lucas Silva", country: "BR", course: course1, lessonIds: course1LessonIds, enrolledDaysAgo: 70, lessonsCompleted: 12 },
+    { name: "Mia Kowalski", country: "PL", course: course1, lessonIds: course1LessonIds, enrolledDaysAgo: 62, lessonsCompleted: 5 },
+    { name: "Ethan Okafor", country: "NG", course: course1, lessonIds: course1LessonIds, enrolledDaysAgo: 55, lessonsCompleted: 0 },
+    { name: "Isabella Rossi", country: "DE", course: course1, lessonIds: course1LessonIds, enrolledDaysAgo: 28, lessonsCompleted: "all" },
+    { name: "Mateo Garcia", country: "MX", course: course1, lessonIds: course1LessonIds, enrolledDaysAgo: 24, lessonsCompleted: 5 },
+    { name: "Chloe Dubois", country: "FR", course: course1, lessonIds: course1LessonIds, enrolledDaysAgo: 18, lessonsCompleted: 2 },
+    { name: "Arjun Mehta", country: "IN", course: course1, lessonIds: course1LessonIds, enrolledDaysAgo: 8, lessonsCompleted: 0 },
+    { name: "Zara Ahmed", country: "PK", course: course1, lessonIds: course1LessonIds, enrolledDaysAgo: 5, lessonsCompleted: 1 },
+    // Course 2 — Building REST APIs with Node.js
+    { name: "Oliver Brown", country: "GB", course: course2, lessonIds: course2LessonIds, enrolledDaysAgo: 80, lessonsCompleted: "all" },
+    { name: "Amara Nwosu", country: "KE", course: course2, lessonIds: course2LessonIds, enrolledDaysAgo: 66, lessonsCompleted: 6 },
+    { name: "Daniel Novak", country: "CZ", course: course2, lessonIds: course2LessonIds, enrolledDaysAgo: 48, lessonsCompleted: 6 },
+    { name: "Hana Tanaka", country: "JP", course: course2, lessonIds: course2LessonIds, enrolledDaysAgo: 34, lessonsCompleted: 14 },
+    { name: "Gabriel Santos", country: "CO", course: course2, lessonIds: course2LessonIds, enrolledDaysAgo: 21, lessonsCompleted: 0 },
+    { name: "Freya Larsen", country: "NO", course: course2, lessonIds: course2LessonIds, enrolledDaysAgo: 12, lessonsCompleted: 3 },
+    { name: "Ravi Patel", country: "ZA", course: course2, lessonIds: course2LessonIds, enrolledDaysAgo: 3, lessonsCompleted: 0 },
+  ];
+
+  function emailFor(name: string) {
+    return `${name.toLowerCase().replace(/\s+/g, ".")}@student.dev`;
+  }
+
+  function createStudent(name: string, joinedDaysAgo: number) {
+    const [user] = db
+      .insert(schema.users)
+      .values({
+        name,
+        email: emailFor(name),
+        role: UserRole.Student,
+        avatarUrl: `https://api.dicebear.com/9.x/avataaars/svg?seed=${slugify(name)}`,
+        createdAt: daysAgo(joinedDaysAgo),
+      })
+      .returning()
+      .all();
+    return user;
+  }
+
+  // Enrolls a student and records progress through the first N lessons in
+  // course order, spreading completion dates between enrollment and today.
+  function enrollWithProgress(
+    userId: number,
+    courseId: number,
+    lessonIds: number[],
+    enrolledDaysAgo: number,
+    lessonsCompleted: number | "all"
+  ) {
+    const count = lessonsCompleted === "all" ? lessonIds.length : lessonsCompleted;
+    const step = Math.max(1, Math.floor(enrolledDaysAgo / (count + 1)));
+    const finished = count === lessonIds.length;
+
+    db.insert(schema.enrollments)
+      .values({
+        userId,
+        courseId,
+        enrolledAt: daysAgo(enrolledDaysAgo),
+        completedAt: finished ? daysAgo(Math.max(0, enrolledDaysAgo - step * count)) : null,
+      })
+      .run();
+
+    for (let i = 0; i < count; i++) {
+      markComplete(userId, lessonIds[i], Math.max(0, enrolledDaysAgo - step * (i + 1)));
+    }
+    if (count > 0 && !finished) {
+      markInProgress(userId, lessonIds[count]);
+    }
+  }
+
+  let cohortPurchaseCount = 0;
+
+  for (const member of cohort) {
+    const user = createStudent(member.name, member.enrolledDaysAgo + 1);
+    db.insert(schema.purchases)
+      .values({
+        userId: user.id,
+        courseId: member.course.id,
+        amountPaid: calculatePppPrice(member.course.price, member.country),
+        country: member.country,
+        createdAt: daysAgo(member.enrolledDaysAgo),
+      })
+      .run();
+    cohortPurchaseCount++;
+    enrollWithProgress(
+      user.id,
+      member.course.id,
+      member.lessonIds,
+      member.enrolledDaysAgo,
+      member.lessonsCompleted
+    );
+
+    // Ava comes back for the second course — a repeat buyer for the leaderboard.
+    if (member.name === "Ava Chen") {
+      db.insert(schema.purchases)
+        .values({
+          userId: user.id,
+          courseId: course2.id,
+          amountPaid: calculatePppPrice(course2.price, member.country),
+          country: member.country,
+          createdAt: daysAgo(40),
+        })
+        .run();
+      cohortPurchaseCount++;
+      enrollWithProgress(user.id, course2.id, course2LessonIds, 40, 4);
+    }
+  }
+
+  // A second team: Priya Shah buys 3 seats of course 1; two are redeemed.
+  const priya = createStudent("Priya Shah", 80);
+  const [team2] = db
+    .insert(schema.teams)
+    .values({ createdAt: daysAgo(75) })
+    .returning()
+    .all();
+  db.insert(schema.teamMembers)
+    .values({ teamId: team2.id, userId: priya.id, role: TeamMemberRole.Admin, createdAt: daysAgo(75) })
+    .run();
+  const [team2Purchase] = db
+    .insert(schema.purchases)
+    .values({
+      userId: priya.id,
+      courseId: course1.id,
+      amountPaid: course1.price * 3,
+      country: "AU",
+      createdAt: daysAgo(75),
+    })
+    .returning()
+    .all();
+  cohortPurchaseCount++;
+
+  const team2Coupons = db
+    .insert(schema.coupons)
+    .values(
+      ["TEAM-TS-P1Q2R3", "TEAM-TS-S4T5U6", "TEAM-TS-V7W8X9"].map((code) => ({
+        teamId: team2.id,
+        courseId: course1.id,
+        code,
+        purchaseId: team2Purchase.id,
+        createdAt: daysAgo(75),
+      }))
+    )
+    .returning()
+    .all();
+
+  const teamSeatHolders: Pick<CohortMember, "name" | "enrolledDaysAgo" | "lessonsCompleted">[] = [
+    { name: "Tom Walsh", enrolledDaysAgo: 74, lessonsCompleted: 9 },
+    { name: "Nina Petrova", enrolledDaysAgo: 72, lessonsCompleted: "all" },
+  ];
+  teamSeatHolders.forEach((holder, i) => {
+    const user = createStudent(holder.name, holder.enrolledDaysAgo + 1);
+    db.update(schema.coupons)
+      .set({ redeemedByUserId: user.id, redeemedAt: daysAgo(holder.enrolledDaysAgo) })
+      .where(eq(schema.coupons.id, team2Coupons[i].id))
+      .run();
+    enrollWithProgress(user.id, course1.id, course1LessonIds, holder.enrolledDaysAgo, holder.lessonsCompleted);
+  });
+
+  const cohortStudentCount = cohort.length + 1 + teamSeatHolders.length;
+  console.log(
+    `Created analytics cohort: ${cohortStudentCount} students, ${cohortPurchaseCount} purchases (incl. 1 team purchase of 3 seats).`
+  );
+
   console.log("\n✓ Seed complete!");
-  console.log("  Users: 9 (1 admin, 2 instructors, 6 students)");
+  console.log(
+    `  Users: ${9 + cohortStudentCount} (1 admin, 2 instructors, ${6 + cohortStudentCount} students)`
+  );
   console.log("  Categories: 5");
   console.log(
     `  Courses: 2 (${course1LessonIds.length} + ${course2LessonIds.length} lessons)`
   );
   console.log("  Quizzes: 3");
-  console.log("  Enrollments: 7");
+  console.log(`  Enrollments: ${7 + cohort.length + 1 + teamSeatHolders.length}`);
   console.log("  Course ratings: 6");
   console.log("  Lesson comments: 15 (4 questions awaiting an answer)");
-  console.log("  Purchases: 6 (5 individual + 1 team)");
-  console.log("  Teams: 1 (with 5 coupons)");
+  console.log(
+    `  Purchases: ${6 + cohortPurchaseCount} (${5 + cohortPurchaseCount - 1} individual + 2 team)`
+  );
+  console.log("  Teams: 2 (with 8 coupons)");
 }
 
 seed().catch(console.error);
