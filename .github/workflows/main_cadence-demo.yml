@@ -1,0 +1,76 @@
+# Builds, tests and deploys Cadence to the Azure Web App cadence-demo-cad078.
+# Docs for the Azure Web Apps Deploy action: https://github.com/Azure/webapps-deploy
+#
+# The deploy uploads the source; App Service installs and builds it
+# (SCM_DO_BUILD_DURING_DEPLOYMENT=true) so better-sqlite3 is compiled for the
+# app's own Linux runtime. The SQLite database lives in /home/data and is not
+# touched by deploys; scripts/start-production.sh applies new migrations.
+
+name: Build and deploy Cadence to Azure Web App - cadence-demo-cad078
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-cadence-demo
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read # Required for actions/checkout
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npx vitest run
+
+      - name: Package source for deployment
+        # Same files as a manual deploy: tracked files, minus agent tooling,
+        # the request logger and any SQLite files.
+        run: |
+          git ls-files \
+            | grep -vE '^(\.claude/|request-logger/)' \
+            | grep -vE '\.db(-wal|-shm|-journal)?$' \
+            | zip -q cadence.zip -@
+
+      - name: Upload artifact for deployment job
+        uses: actions/upload-artifact@v4
+        with:
+          name: cadence-app
+          path: cadence.zip
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - name: Download artifact from build job
+        uses: actions/download-artifact@v4
+        with:
+          name: cadence-app
+
+      - name: Deploy to Azure Web App
+        id: deploy-to-webapp
+        uses: azure/webapps-deploy@v3
+        with:
+          app-name: cadence-demo-cad078
+          slot-name: Production
+          package: cadence.zip
+          publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE_CADENCE }}
