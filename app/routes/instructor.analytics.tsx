@@ -21,6 +21,7 @@ import {
 } from "~/components/ui/select";
 import {
   AnalyticsErrorBoundary,
+  EarningsChart,
   EarningsOverview,
   NoSalesState,
   RANGE_LABELS,
@@ -129,11 +130,17 @@ export default function InstructorAnalytics({
             {analytics.salesCount === 0 ? (
               <NoSalesState range={range} />
             ) : (
-              <EarningsOverview
-                earnings={analytics.earnings}
-                salesCount={analytics.salesCount}
-                rangeLabel={rangeLabel}
-              />
+              <>
+                <EarningsOverview
+                  earnings={analytics.earnings}
+                  salesCount={analytics.salesCount}
+                  rangeLabel={rangeLabel}
+                />
+                <EarningsChart
+                  timeline={analytics.earningsTimeline}
+                  rangeLabel={rangeLabel}
+                />
+              </>
             )}
             <StudentsOverview
               buyerCount={analytics.buyerCount}

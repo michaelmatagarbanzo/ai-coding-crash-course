@@ -12,7 +12,12 @@ import {
   users,
 } from "~/db/schema";
 import { splitEarnings } from "~/lib/earnings";
-import type { AnalyticsRange } from "~/lib/analyticsRange";
+import type {
+  AnalyticsRange,
+  EarningsTimeline,
+  TimelinePeriod,
+  TimelinePoint,
+} from "~/lib/analytics";
 
 export type { AnalyticsRange };
 
@@ -116,6 +121,14 @@ function getStudentFigures(courseIds: number[], since: string | null) {
   return row;
 }
 
+/** Purchases of the given courses made since the start of the range. */
+function purchasesInScope(courseIds: number[], since: string | null) {
+  return and(
+    inArray(purchases.courseId, courseIds),
+    since ? gte(purchases.createdAt, since) : undefined
+  );
+}
+
 const TOP_BUYER_LIMIT = 10;
 
 /**
@@ -141,12 +154,7 @@ function getTopBuyers(courseIds: number[], since: string | null) {
     })
     .from(purchases)
     .innerJoin(users, eq(purchases.userId, users.id))
-    .where(
-      and(
-        inArray(purchases.courseId, courseIds),
-        since ? gte(purchases.createdAt, since) : undefined
-      )
-    )
+    .where(purchasesInScope(courseIds, since))
     .groupBy(users.id)
     .orderBy(desc(totalSpent), asc(users.id))
     .limit(TOP_BUYER_LIMIT)
@@ -164,12 +172,7 @@ function getSalesFigures(courseIds: number[], since: string | null) {
       gross: sql<number>`coalesce(sum(${purchases.amountPaid}), 0)`,
     })
     .from(purchases)
-    .where(
-      and(
-        inArray(purchases.courseId, courseIds),
-        since ? gte(purchases.createdAt, since) : undefined
-      )
-    )
+    .where(purchasesInScope(courseIds, since))
     .get()!;
 }
 
@@ -188,6 +191,105 @@ function getHeadlineFigures(courseIds: number[], since: string | null) {
   };
 }
 
+const RANGE_PERIOD: Record<AnalyticsRange, TimelinePeriod> = {
+  "30d": "day",
+  "90d": "week",
+  all: "month",
+};
+
+/** The UTC day of a date, as YYYY-MM-DD. */
+function utcDay(date: Date) {
+  return date.toISOString().slice(0, 10);
+}
+
+/** Midnight UTC at the start of the period containing `date`. Weeks start on Monday. */
+function periodStart(date: Date, period: TimelinePeriod) {
+  const start = new Date(`${utcDay(date)}T00:00:00.000Z`);
+  if (period === "week") {
+    const daysSinceMonday = (start.getUTCDay() + 6) % 7;
+    start.setUTCDate(start.getUTCDate() - daysSinceMonday);
+  }
+  if (period === "month") start.setUTCDate(1);
+  return start;
+}
+
+const PERIOD_DAYS = { day: 1, week: 7 } as const;
+
+function nextPeriod(start: Date, period: TimelinePeriod) {
+  const next = new Date(start);
+  if (period === "month") next.setUTCMonth(next.getUTCMonth() + 1);
+  else next.setUTCDate(next.getUTCDate() + PERIOD_DAYS[period]);
+  return next;
+}
+
+/**
+ * Sales and net earnings per period across the range: daily for 30 days,
+ * weekly for 90 days and monthly for all time (from the first sale's month).
+ * Periods are UTC, and those without sales are zero-filled.
+ */
+function getEarningsTimeline(
+  courseIds: number[],
+  range: AnalyticsRange,
+  now: Date
+): EarningsTimeline {
+  const period = RANGE_PERIOD[range];
+  const since = rangeStart(range, now);
+  const purchaseDay = sql<string>`substr(${purchases.createdAt}, 1, 10)`;
+  const salesByDay =
+    courseIds.length === 0
+      ? []
+      : db
+          .select({
+            day: purchaseDay,
+            count: sql<number>`count(*)`,
+            gross: sql<number>`sum(${purchases.amountPaid})`,
+          })
+          .from(purchases)
+          .where(purchasesInScope(courseIds, since))
+          .groupBy(purchaseDay)
+          .orderBy(purchaseDay)
+          .all();
+
+  const firstDay = since ?? salesByDay[0]?.day;
+  if (!firstDay) return { period, points: [] };
+
+  const salesByPeriod = new Map<string, { count: number; gross: number }>();
+  for (const row of salesByDay) {
+    const key = utcDay(periodStart(new Date(row.day), period));
+    const total = salesByPeriod.get(key) ?? { count: 0, gross: 0 };
+    salesByPeriod.set(key, {
+      count: total.count + row.count,
+      gross: total.gross + row.gross,
+    });
+  }
+
+  // Net is taken off the running gross so the platform fee is still rounded
+  // once overall: the periods add up exactly to the headline net.
+  const points: TimelinePoint[] = [];
+  let runningGross = 0;
+  let runningNet = 0;
+  for (
+    let start = periodStart(new Date(firstDay), period);
+    start <= now;
+    start = nextPeriod(start, period)
+  ) {
+    const key = utcDay(start);
+    const periodSales = salesByPeriod.get(key);
+    const gross = periodSales?.gross ?? 0;
+    runningGross += gross;
+    const net = splitEarnings(runningGross).net - runningNet;
+    runningNet += net;
+    points.push({
+      start: key,
+      salesCount: periodSales?.count ?? 0,
+      gross,
+      net,
+    });
+  }
+
+  return { period, points };
+}
+
 export function getInstructorAnalytics(
   scope: AnalyticsScope,
   range: AnalyticsRange,
@@ -200,6 +302,7 @@ export function getInstructorAnalytics(
   return {
     courseCount: courseIds.length,
     ...getHeadlineFigures(courseIds, since),
+    earningsTimeline: getEarningsTimeline(courseIds, range, now),
     topBuyers: getTopBuyers(courseIds, since),
     courses: inScope.map((course) => ({
       courseId: course.id,
@@ -226,6 +329,7 @@ export function getCourseAnalytics(
   return {
     course,
     ...getHeadlineFigures([course.id], since),
+    earningsTimeline: getEarningsTimeline([course.id], range, now),
     dropOff: getDropOff(course.id, since),
   };
 }

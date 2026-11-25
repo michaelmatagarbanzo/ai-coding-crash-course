@@ -188,6 +188,7 @@ describe("analyticsService", () => {
         completionRate: null,
         topBuyers: [],
         courses: [],
+        earningsTimeline: { period: "month", points: [] },
       });
     });
 
@@ -590,6 +591,145 @@ describe("analyticsService", () => {
     });
   });
 
+  describe("getInstructorAnalytics — earnings over time", () => {
+    it("returns one zero-filled daily period per UTC day for 30 days", () => {
+      addPurchase(base.course.id, 4999, 1); // 2026-06-29T12:00Z
+
+      const { earningsTimeline } = getInstructorAnalytics(
+        base.instructor.id,
+        "30d",
+        NOW
+      );
+
+      // The range starts 2026-05-31T12:00Z, so 31 days through 2026-06-30.
+      expect(earningsTimeline.period).toBe("day");
+      expect(earningsTimeline.points).toHaveLength(31);
+      expect(earningsTimeline.points[0]).toEqual({
+        start: "2026-05-31",
+        salesCount: 0,
+        gross: 0,
+        net: 0,
+      });
+      expect(earningsTimeline.points.at(-2)).toEqual({
+        start: "2026-06-29",
+        salesCount: 1,
+        gross: 4999,
+        net: 3999,
+      });
+      expect(earningsTimeline.points.at(-1)?.start).toBe("2026-06-30");
+    });
+
+    it("counts only sales after the range start in the first, partial day", () => {
+      const hour = 1 / 24;
+      addPurchase(base.course.id, 100, 30 + hour); // 2026-05-31T11:00Z, before
+      addPurchase(base.course.id, 200, 30 - hour); // 2026-05-31T13:00Z, after
+
+      const analytics = getInstructorAnalytics(base.instructor.id, "30d", NOW);
+
+      expect(analytics.earningsTimeline.points[0]).toMatchObject({
+        start: "2026-05-31",
+        salesCount: 1,
+        gross: 200,
+      });
+      expect(analytics.earnings.gross).toBe(200);
+    });
+
+    it("returns Monday-start weekly periods for 90 days", () => {
+      addPurchase(base.course.id, 100, 89); // Thu 2026-04-02
+      addPurchase(base.course.id, 200, 2); // Sun 2026-06-28
+      addPurchase(base.course.id, 400, 1); // Mon 2026-06-29
+
+      const { earningsTimeline } = getInstructorAnalytics(
+        base.instructor.id,
+        "90d",
+        NOW
+      );
+
+      // The range starts Wed 2026-04-01; its week began Mon 2026-03-30.
+      expect(earningsTimeline.period).toBe("week");
+      expect(earningsTimeline.points).toHaveLength(14);
+      expect(earningsTimeline.points[0]).toMatchObject({
+        start: "2026-03-30",
+        gross: 100,
+      });
+      expect(earningsTimeline.points.at(-2)).toMatchObject({
+        start: "2026-06-22",
+        gross: 200,
+      });
+      expect(earningsTimeline.points.at(-1)).toMatchObject({
+        start: "2026-06-29",
+        gross: 400,
+      });
+    });
+
+    it("makes per-period net earnings add up to the headline net", () => {
+      addPurchase(base.course.id, 1, 3);
+      addPurchase(base.course.id, 1, 2);
+      addPurchase(base.course.id, 1, 1);
+
+      const analytics = getInstructorAnalytics(base.instructor.id, "30d", NOW);
+
+      // 3 cents gross → 0.6 fee rounds to 1 → 2 net. Rounding each day on its
+      // own would give 1 + 1 + 1 = 3, so the rounding is carried forward.
+      expect(analytics.earnings.net).toBe(2);
+      const nets = analytics.earningsTimeline.points.map((p) => p.net);
+      expect(nets.slice(-4, -1)).toEqual([1, 1, 0]);
+      expect(nets.reduce((a, b) => a + b, 0)).toBe(2);
+    });
+
+    it("covers only in-scope courses: own published and archived, not drafts or others'", () => {
+      const archived = addCourse(
+        base.instructor.id,
+        "archived",
+        schema.CourseStatus.Archived
+      );
+      const draft = addCourse(
+        base.instructor.id,
+        "draft",
+        schema.CourseStatus.Draft
+      );
+      const otherInstructor = addUser("Other Instructor", schema.UserRole.Instructor);
+      const othersCourse = addCourse(otherInstructor.id, "others-course");
+      addPurchase(base.course.id, 1000, 1);
+      addPurchase(archived.id, 2000, 1);
+      addPurchase(draft.id, 4000, 1);
+      addPurchase(othersCourse.id, 8000, 1);
+
+      const mine = getInstructorAnalytics(base.instructor.id, "30d", NOW);
+      const everyone = getInstructorAnalytics("all", "30d", NOW);
+
+      expect(mine.earningsTimeline.points.at(-2)).toMatchObject({
+        salesCount: 2,
+        gross: 3000,
+      });
+      expect(everyone.earningsTimeline.points.at(-2)).toMatchObject({
+        salesCount: 3,
+        gross: 11000,
+      });
+    });
+
+    it("returns monthly periods for all time, from the first sale's month", () => {
+      addPurchase(base.course.id, 1000, 120); // 2026-03-02
+      addPurchase(base.course.id, 2000, 119); // 2026-03-03
+      addPurchase(base.course.id, 500, 5); // 2026-06-25
+
+      const { earningsTimeline } = getInstructorAnalytics(
+        base.instructor.id,
+        "all",
+        NOW
+      );
+
+      expect(earningsTimeline.period).toBe("month");
+      expect(earningsTimeline.points.map((p) => [p.start, p.gross])).toEqual([
+        ["2026-03-01", 3000],
+        ["2026-04-01", 0],
+        ["2026-05-01", 0],
+        ["2026-06-01", 500],
+      ]);
+      expect(earningsTimeline.points[0].salesCount).toBe(2);
+    });
+  });
+
   describe("getCourseAnalytics — figures", () => {
     it("reports earnings, counts, progress and completion for that course only", () => {
       const other = addCourse(base.instructor.id, "other-course");
@@ -636,6 +776,33 @@ describe("analyticsService", () => {
       expect(analytics.salesCount).toBe(1);
       expect(analytics.earnings.gross).toBe(1000);
       expect(analytics.studentCount).toBe(1);
+    });
+  });
+
+  describe("getCourseAnalytics — earnings over time", () => {
+    it("covers only that course, for the selected range", () => {
+      const other = addCourse(base.instructor.id, "other-course");
+      addPurchase(base.course.id, 1000, 1);
+      addPurchase(other.id, 9000, 1);
+      addPurchase(base.course.id, 500, 40); // outside 30 days
+
+      const analytics = getCourseAnalytics(
+        base.instructor.id,
+        base.course.id,
+        "30d",
+        NOW
+      );
+
+      const timeline = analytics!.earningsTimeline;
+      expect(timeline.period).toBe("day");
+      expect(timeline.points).toHaveLength(31);
+      expect(timeline.points.at(-2)).toEqual({
+        start: "2026-06-29",
+        salesCount: 1,
+        gross: 1000,
+        net: 800,
+      });
+      expect(timeline.points.reduce((sum, p) => sum + p.gross, 0)).toBe(1000);
     });
   });
 

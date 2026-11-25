@@ -10,6 +10,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "~/components/ui/card";
 import { Skeleton } from "~/components/ui/skeleton";
 import {
   AnalyticsErrorBoundary,
+  EarningsChart,
   EarningsOverview,
   NoSalesState,
   RANGE_LABELS,
@@ -95,11 +96,17 @@ export default function CourseAnalytics({ loaderData }: Route.ComponentProps) {
         {analytics.salesCount === 0 ? (
           <NoSalesState range={range} />
         ) : (
-          <EarningsOverview
-            earnings={analytics.earnings}
-            salesCount={analytics.salesCount}
-            rangeLabel={rangeLabel}
-          />
+          <>
+            <EarningsOverview
+              earnings={analytics.earnings}
+              salesCount={analytics.salesCount}
+              rangeLabel={rangeLabel}
+            />
+            <EarningsChart
+              timeline={analytics.earningsTimeline}
+              rangeLabel={rangeLabel}
+            />
+          </>
         )}
         <StudentsOverview
           buyerCount={analytics.buyerCount}

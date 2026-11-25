@@ -1,5 +1,11 @@
 import { Link, isRouteErrorResponse, useSearchParams } from "react-router";
-import { ANALYTICS_RANGES, type AnalyticsRange } from "~/lib/analyticsRange";
+import {
+  ANALYTICS_RANGES,
+  type AnalyticsRange,
+  type EarningsTimeline,
+  type TimelinePeriod,
+  type TimelinePoint,
+} from "~/lib/analytics";
 import { PLATFORM_FEE_RATE, type Earnings } from "~/lib/earnings";
 import { cn, formatMoney } from "~/lib/utils";
 import { Card, CardContent, CardHeader, CardTitle } from "~/components/ui/card";
@@ -122,6 +128,97 @@ export function EarningsOverview({
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+const PERIOD_FORMAT: Record<TimelinePeriod, Intl.DateTimeFormatOptions> = {
+  day: { month: "short", day: "numeric" },
+  week: { month: "short", day: "numeric" },
+  month: { month: "short", year: "numeric" },
+};
+
+function formatPeriod(point: TimelinePoint, period: TimelinePeriod) {
+  const label = new Date(`${point.start}T00:00:00.000Z`).toLocaleDateString(
+    "en-US",
+    { ...PERIOD_FORMAT[period], timeZone: "UTC" }
+  );
+  return period === "week" ? `Week of ${label}` : label;
+}
+
+/**
+ * Net earnings per period as plain Tailwind bars, with a visually hidden
+ * table as the text alternative.
+ */
+export function EarningsChart({
+  timeline,
+  rangeLabel,
+}: {
+  timeline: EarningsTimeline;
+  rangeLabel: string;
+}) {
+  const { period, points } = timeline;
+  const max = Math.max(1, ...points.map((p) => p.net));
+  const caption = `Net earnings per ${period} · ${rangeLabel}`;
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-sm font-medium text-muted-foreground">
+          {caption}
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        <div aria-hidden="true">
+          <div className="mb-1 text-xs tabular-nums text-muted-foreground">
+            {formatMoney(max)}
+          </div>
+          <div className="flex h-40 items-end gap-px border-b border-l pl-px">
+            {points.map((point) => (
+              <div
+                key={point.start}
+                title={`${formatPeriod(point, period)}: ${formatMoney(point.net)} net · ${point.salesCount} ${point.salesCount === 1 ? "sale" : "sales"}`}
+                className="flex h-full flex-1 items-end hover:bg-muted/60"
+              >
+                <div
+                  className={cn(
+                    "w-full rounded-t-sm bg-primary",
+                    point.net > 0 && "min-h-px"
+                  )}
+                  style={{ height: `${(point.net / max) * 100}%` }}
+                />
+              </div>
+            ))}
+          </div>
+          {points.length > 0 && (
+            <div className="mt-1 flex justify-between text-xs text-muted-foreground">
+              <span>{formatPeriod(points[0], period)}</span>
+              {points.length > 1 && (
+                <span>{formatPeriod(points[points.length - 1], period)}</span>
+              )}
+            </div>
+          )}
+        </div>
+        <table className="sr-only">
+          <caption>{caption}</caption>
+          <thead>
+            <tr>
+              <th scope="col">Period</th>
+              <th scope="col">Net earnings</th>
+              <th scope="col">Sales</th>
+            </tr>
+          </thead>
+          <tbody>
+            {points.map((point) => (
+              <tr key={point.start}>
+                <th scope="row">{formatPeriod(point, period)}</th>
+                <td>{formatMoney(point.net)}</td>
+                <td>{point.salesCount}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </CardContent>
+    </Card>
   );
 }
 
