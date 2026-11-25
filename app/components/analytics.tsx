@@ -1,8 +1,5 @@
 import { Link, isRouteErrorResponse, useSearchParams } from "react-router";
-import {
-  ANALYTICS_RANGES,
-  type AnalyticsRange,
-} from "~/services/analyticsService";
+import { ANALYTICS_RANGES, type AnalyticsRange } from "~/lib/analyticsRange";
 import { PLATFORM_FEE_RATE, type Earnings } from "~/lib/earnings";
 import { cn, formatMoney } from "~/lib/utils";
 import { Card, CardContent, CardHeader, CardTitle } from "~/components/ui/card";

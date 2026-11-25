@@ -12,14 +12,13 @@ import {
   users,
 } from "~/db/schema";
 import { splitEarnings } from "~/lib/earnings";
+import type { AnalyticsRange } from "~/lib/analyticsRange";
+
+export type { AnalyticsRange };
 
 // ─── Analytics Service ───
 // Instructor Analytics figures, computed live from purchases, enrollments and
 // lesson progress. Uses positional parameters (project convention).
-
-export type AnalyticsRange = "30d" | "90d" | "all";
-
-export const ANALYTICS_RANGES: AnalyticsRange[] = ["30d", "90d", "all"];
 
 const RANGE_DAYS: Record<Exclude<AnalyticsRange, "all">, number> = {
   "30d": 30,
